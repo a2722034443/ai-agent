@@ -1,0 +1,47 @@
+const BASE_URL = import.meta.env.VITE_API_URL || ''
+
+async function request(path, options = {}) {
+  const res = await fetch(`${BASE_URL}${path}`, {
+    headers: {
+      'Content-Type': 'application/json',
+      ...(localStorage.getItem('lla_token') ? { 'X-Session-Token': localStorage.getItem('lla_token') } : {}),
+      ...(options.headers || {})
+    },
+    ...options
+  })
+  const data = await res.json().catch(() => ({}))
+  if (!res.ok) {
+    throw new Error(data.error || `HTTP ${res.status}`)
+  }
+  return data
+}
+
+export async function createSession(nickname) {
+  const data = await request('/api/sessions', {
+    method: 'POST',
+    body: JSON.stringify({ nickname })
+  })
+  localStorage.setItem('lla_token', data.token)
+  return data
+}
+
+export function createPlan(message) {
+  return request('/api/plans', {
+    method: 'POST',
+    body: JSON.stringify({ message })
+  })
+}
+
+export function confirmPlan(planId, rank) {
+  return request(`/api/plans/${planId}/confirm`, {
+    method: 'POST',
+    body: JSON.stringify({ rank })
+  })
+}
+
+export function sendFeedback(planId, message) {
+  return request(`/api/plans/${planId}/feedback`, {
+    method: 'POST',
+    body: JSON.stringify({ message })
+  })
+}

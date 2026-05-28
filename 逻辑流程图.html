@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local Life Agent - 完整逻辑流程</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            text-align: center;
+            color: white;
+            font-size: 2.5rem;
+            margin-bottom: 40px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .flow-section {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        
+        .section-title {
+            font-size: 1.5rem;
+            color: #1a1a1a;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 3px solid #667eea;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .section-title .icon {
+            font-size: 2rem;
+        }
+        
+        .flow-diagram {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        
+        .flow-step {
+            display: flex;
+            align-items: flex-start;
+            gap: 20px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 12px;
+            border-left: 4px solid #667eea;
+            transition: all 0.3s ease;
+        }
+        
+        .flow-step:hover {
+            transform: translateX(10px);
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+        }
+        
+        .step-number {
+            background: #667eea;
+            color: white;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 1.2rem;
+            flex-shrink: 0;
+        }
+        
+        .step-content {
+            flex: 1;
+        }
+        
+        .step-title {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #1a1a1a;
+            margin-bottom: 8px;
+        }
+        
+        .step-desc {
+            color: #666;
+            line-height: 1.6;
+        }
+        
+        .step-tech {
+            margin-top: 10px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        
+        .tech-tag {
+            background: #e3e8ff;
+            color: #667eea;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+        
+        .connector {
+            text-align: center;
+            color: #667eea;
+            font-size: 1.5rem;
+        }
+        
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        .grid-3 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 20px;
+        }
+        
+        .card {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 20px;
+            border: 2px solid #e5e7eb;
+        }
+        
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: #1a1a1a;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .card-content {
+            color: #666;
+            line-height: 1.8;
+        }
+        
+        .card-content li {
+            margin-left: 20px;
+            margin-bottom: 5px;
+        }
+        
+        .highlight {
+            background: #fff3cd;
+            padding: 15px;
+            border-radius: 8px;
+            border-left: 4px solid #ffc107;
+            margin: 15px 0;
+        }
+        
+        .highlight-title {
+            font-weight: 600;
+            color: #856404;
+            margin-bottom: 5px;
+        }
+        
+        .danger {
+            background: #f8d7da;
+            border-left-color: #dc3545;
+        }
+        
+        .danger .highlight-title {
+            color: #721c24;
+        }
+        
+        .success {
+            background: #d4edda;
+            border-left-color: #28a745;
+        }
+        
+        .success .highlight-title {
+            color: #155724;
+        }
+        
+        .code-block {
+            background: #1a1a1a;
+            color: #f8f8f2;
+            padding: 20px;
+            border-radius: 8px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            overflow-x: auto;
+            margin: 15px 0;
+            line-height: 1.6;
+        }
+        
+        .code-comment {
+            color: #6272a4;
+        }
+        
+        .code-keyword {
+            color: #ff79c6;
+        }
+        
+        .code-string {
+            color: #f1fa8c;
+        }
+        
+        .code-function {
+            color: #50fa7b;
+        }
+        
+        .timeline {
+            position: relative;
+            padding-left: 30px;
+        }
+        
+        .timeline::before {
+            content: '';
+            position: absolute;
+            left: 10px;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: #667eea;
+        }
+        
+        .timeline-item {
+            position: relative;
+            padding: 15px 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+        
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: -25px;
+            top: 20px;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #667eea;
+            border: 2px solid white;
+        }
+        
+        .timeline-time {
+            font-weight: 600;
+            color: #667eea;
+            margin-bottom: 5px;
+        }
+        
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+        }
+        
+        .comparison-table th,
+        .comparison-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        
+        .comparison-table th {
+            background: #667eea;
+            color: white;
+            font-weight: 600;
+        }
+        
+        .comparison-table tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+        
+        .badge-success {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .badge-danger {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .badge-warning {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        .badge-info {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+        
+        .progress-bar {
+            height: 8px;
+            background: #e5e7eb;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            border-radius: 4px;
+            transition: width 0.3s ease;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+        }
+        
+        .stat-label {
+            font-size: 0.9rem;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+        
+        @media (max-width: 768px) {
+            .grid-2, .grid-3 {
+                grid-template-columns: 1fr;
+            }
+            
+            .stats-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎯 Local Life Agent - 完整逻辑流程</h1>
+        
+        <!-- 核心原则 -->
+        <div class="flow-section">
+            <div class="section-title">
+                <span class="icon">📋</span>
+                核心原则
+            </div>
+            
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-title">✅ 正确做法</div>
+                    <div class="card-content">
+                        <ul>
+                            <li>使用真实高德API获取POI数据</li>
+                            <li>使用MiMo进行意图解析</li>
+                            <li>使用Tavily进行联网核验</li>
+                            <li>所有返回内容必须是中文</li>
+                            <li>失败时返回中文阻断提示</li>
+                            <li>Mock数据只在test profile中使用</li>
+                        </ul>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-title">❌ 错误做法</div>
+                    <div class="card-content">
+                        <ul>
+                            <li>使用SeedData中的英文假数据</li>
+                            <li>使用关键词匹配代替LLM</li>
+                            <li>返回英文分享消息</li>
+                            <li>失败时静默降级到Mock</li>
+                            <li>使用硬编码的假POI名称</li>
+                            <li>在生产环境使用Mock数据</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="highlight danger">
+                <div class="highlight-title">⚠️ 当前问题</div>
+                <p>SeedData.java 中使用英文名称（如 "Family Forest Lab", "Coast Science Theater"），MockTools.java 中的 share() 方法生成英文消息。这些在正常环境中是不允许的。</p>
+            </div>
+        </div>
+        
+        <!-- 完整运行链路 -->
+        <div class="flow-section">
+            <div class="section-title">
+                <span class="icon">🔄</span>
+                完整运行链路（8个步骤）
+            </div>
+            
+            <div class="flow-diagram">
+                <div class="flow-step">
+                    <div class="step-number">1</div>
+                    <div class="step-content">
+                        <div class="step-title">用户输入中文需求</div>
+                        <div class="step-desc">用户输入自然语言，如"今天下午带老婆孩子出去玩，孩子5岁"</div>
+                        <div class="step-tech">
+                            <span class="tech-tag">前端输入框</span>
+                            <span class="tech-tag">POST /api/plans</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="connector">↓</div>
+                
+                <div class="flow-step">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                        <div class="step-title">需求解析 Agent → MiMo</div>
+                        <div class="step-desc">调用MiMo解析意图，输出结构化JSON：人数、时间、城市、出发点、硬约束、偏好</div>
+                        <div class="step-tech">
+                            <span class="tech-tag">MiMo API</span>
+                            <span class="tech-tag">mimo-v2.5-pro</span>
+                            <span class="tech-tag">结构化输出</span>
+                        </div>
+                        <div class="code-block">
+<span class="code-comment">// 输入</span>
+"今天下午带老婆孩子出去玩，孩子5岁，老婆在减肥，别离家太远"
+
+<span class="code-comment">// 输出</span>
+{
+  <span class="code-string">"scenario"</span>: <span class="code-string">"family"</span>,
+  <span class="code-string">"group"</span>: { <span class="code-string">"total"</span>: 3, <span class="code-string">"composition"</span>: <span class="code-string">"2大1小"</span>, <span class="code-string">"childAge"</span>: 5 },
+  <span class="code-string">"time_window"</span>: { <span class="code-string">"start"</span>: <span class="code-string">"14:00"</span>, <span class="code-string">"end"</span>: <span class="code-string">"20:00"</span> },
+  <span class="code-string">"location"</span>: { <span class="code-string">"city"</span>: <span class="code-string">"大连"</span>, <span class="code-string">"radius"</span>: <span class="code-string">"nearby"</span> },
+  <span class="code-string">"hard_constraints"</span>: [<span class="code-string">"kid_friendly"</span>, <span class="code-string">"low_calorie_preferred"</span>]
+}
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="connector">↓</div>
+                
+                <div class="flow-step">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                        <div class="step-title">联网核验 Agent → Tavily</div>
+                        <div class="step-desc">调用Tavily查近期活动、口碑、排队、闭店、天气等信息</div>
+                        <div class="step-tech">
+                            <span class="tech-tag">Tavily API</span>
+                            <span class="tech-tag">Web Search</span>
+                            <span class="tech-tag">实时信息</span>
+                        </div>
+                        <div class="highlight success">
+                            <div class="highlight-title">✅ 核验内容</div>
+                            <ul>
+                                <li>近期活动：是否有展览、演出、节庆</li>
+                                <li>口碑评价：景点/餐厅的最新评价</li>
+                                <li>排队情况：热门地点的排队时长</li>
+                                <li>闭店信息：是否有临时关闭</li>
+                                <li>天气预报：下午是否有雨</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="connector">↓</div>
+                
+                <div class="flow-step">
+                    <div class="step-number">4</div>
+                    <div class="step-content">
+                        <div class="step-title">POI Agent → 高德Web服务</div>
+                        <div class="step-desc">调用高德POI搜索，根据真实关键词和范围检索地点</div>
+                        <div class="step-tech">
+                            <span class="tech-tag">高德Web服务API</span>
+                            <span class="tech-tag">POI搜索</span>
+                            <span class="tech-tag">中文结果</span>
+                        </div>
+                        <div class="code-block">
+<span class="code-comment">// 搜索关键词（根据场景动态生成）</span>
+家庭场景: <span class="code-string">"亲子 乐园 博物馆"</span>
+朋友场景: <span class="code-string">"聚餐 KTV 密室"</span>
+减肥场景: <span class="code-string">"轻食 健康餐 沙拉"</span>
+
+<span class="code-comment">// 搜索范围</span>
+城市: 大连
+范围: 10km（附近）/ 全城
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="connector">↓</div>
+                
+                <div class="flow-step">
+                    <div class="step-number">5</div>
+                    <div class="step-content">
+                        <div class="step-title">路线 Agent → 高德距离/路线接口</div>
+                        <div class="step-desc">调用高德路线规划，计算真实距离和耗时</div>
+                        <div class="step-tech">
+                            <span class="tech-tag">高德路线API</span>
+                            <span class="tech-tag">步行/驾车</span>
+                            <span class="tech-tag">真实耗时</span>
+                        </div>
+                        <div class="highlight">
+                            <div class="highlight-title">💡 计算内容</div>
+                            <ul>
+                                <li>POI间的真实距离（米）</li>
+                                <li>步行/驾车的预计耗时</li>
+                                <li>总行程时间是否在4-6小时内</li>
+                                <li>是否需要调整路线</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="connector">↓</div>
+                
+                <div class="flow-step">
+                    <div class="step-number">6</div>
+                    <div class="step-content">
+                        <div class="step-title">方案生成 Agent → MiMo</div>
+                        <div class="step-desc">调用MiMo，只允许基于真实候选地点生成Top-3中文方案</div>
+                        <div class="step-tech">
+                            <span class="tech-tag">MiMo API</span>
+                            <span class="tech-tag">中文输出</span>
+                            <span class="tech-tag">防编造</span>
+                        </div>
+                        <div class="code-block">
+<span class="code-comment">// 输入：真实POI列表 + 用户约束</span>
+候选地点: [大连森林动物园, 星海广场, ...]
+用户约束: 儿童友好, 低卡, 4-6小时
+
+<span class="code-comment">// 输出：Top-3中文方案</span>
+方案1: {
+  <span class="code-string">"name"</span>: <span class="code-string">"亲子轻松游"</span>,
+  <span class="code-string">"timeline"</span>: [
+    { <span class="code-string">"time"</span>: <span class="code-string">"14:00"</span>, <span class="code-string">"place"</span>: <span class="code-string">"大连森林动物园"</span>, <span class="code-string">"duration"</span>: <span class="code-string">"2小时"</span> },
+    { <span class="code-string">"time"</span>: <span class="code-string">"16:30"</span>, <span class="code-string">"place"</span>: <span class="code-string">"轻食餐厅"</span>, <span class="code-string">"duration"</span>: <span class="code-string">"1.5小时"</span> },
+    { <span class="code-string">"time"</span>: <span class="code-string">"18:30"</span>, <span class="code-string">"place"</span>: <span class="code-string">"星海广场散步"</span>, <span class="code-string">"duration"</span>: <span class="code-string">"1小时"</span> }
+  ]
+}
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="connector">↓</div>
+                
+                <div class="flow-step">
+                    <div class="step-number">7</div>
+                    <div class="step-content">
+                        <div class="step-title">中文校验器 + 防编造校验器</div>
+                        <div class="step-desc">检查输出是否合规，失败则阻断，不返回假方案</div>
+                        <div class="step-tech">
+                            <span class="tech-tag">校验规则</span>
+                            <span class="tech-tag">阻断机制</span>
+                            <span class="tech-tag">中文检查</span>
+                        </div>
+                        <div class="grid-2">
+                            <div class="highlight">
+                                <div class="highlight-title">中文校验</div>
+                                <ul>
+                                    <li>所有可见文案必须是中文</li>
+                                    <li>不能出现英文地名</li>
+                                    <li>不能出现英文菜名</li>
+                                </ul>
+                            </div>
+                            <div class="highlight">
+                                <div class="highlight-title">防编造校验</div>
+                                <ul>
+                                    <li>所有地点必须来自高德API</li>
+                                    <li>不能使用SeedData中的假数据</li>
+                                    <li>失败时返回阻断提示</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="connector">↓</div>
+                
+                <div class="flow-step">
+                    <div class="step-number">8</div>
+                    <div class="step-content">
+                        <div class="step-title">用户确认 → 执行（Mock）</div>
+                        <div class="step-desc">用户确认方案后，执行订座、购票、配送（暂时Mock），订单和分享文案必须中文</div>
+                        <div class="step-tech">
+                            <span class="tech-tag">Mock订单</span>
+                            <span class="tech-tag">中文消息</span>
+                            <span class="tech-tag">分享功能</span>
+                        </div>
+                        <div class="code-block">
+<span class="code-comment">// 订单（Mock）</span>
+{
+  <span class="code-string">"orderNo"</span>: <span class="code-string">"MOCK-DINING-abc123"</span>,
+  <span class="code-string">"action"</span>: <span class="code-string">"订座"</span>,
+  <span class="code-string">"target"</span>: <span class="code-string">"轻食餐厅"</span>,
+  <span class="code-string">"status"</span>: <span class="code-string">"已确认"</span>
+}
+
+<span class="code-comment">// 分享消息（中文）</span>
+"搞定啦！下午2点出发，先去大连森林动物园，然后去轻食餐厅吃饭，最后在星海广场散步。所有预订都已安排好！"
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Agent架构 -->
+        <div class="flow-section">
+            <div class="section-title">
+                <span class="icon">🤖</span>
+                Agent架构设计
+            </div>
+            
+            <div class="highlight">
+                <div class="highlight-title">💡 设计原则</div>
+                <p>v1使用1个LLM（MiMo），多个Agent角色共享。不是每个Agent一个模型，而是专业化分工 + 共享LLM。</p>
+            </div>
+            
+            <div class="grid-3">
+                <div class="card">
+                    <div class="card-title">🧠 IntentParserAgent</div>
+                    <div class="card-content">
+                        <p><strong>职责：</strong>意图解析</p>
+                        <p><strong>工具：</strong>MiMo API</p>
+                        <p><strong>输入：</strong>用户自然语言</p>
+                        <p><strong>输出：</strong>结构化JSON</p>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-title">🔍 SearchVerifierAgent</div>
+                    <div class="card-content">
+                        <p><strong>职责：</strong>联网核验</p>
+                        <p><strong>工具：</strong>Tavily API</p>
+                        <p><strong>输入：</strong>地点+场景</p>
+                        <p><strong>输出：</strong>实时信息</p>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-title">📍 POISearchAgent</div>
+                    <div class="card-content">
+                        <p><strong>职责：</strong>POI搜索</p>
+                        <p><strong>工具：</strong>高德API</p>
+                        <p><strong>输入：</strong>关键词+范围</p>
+                        <p><strong>输出：</strong>真实POI列表</p>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-title">🗺️ RouteOptimizerAgent</div>
+                    <div class="card-content">
+                        <p><strong>职责：</strong>路线优化</p>
+                        <p><strong>工具：</strong>高德路线API</p>
+                        <p><strong>输入：</strong>POI列表</p>
+                        <p><strong>输出：</strong>最优路线</p>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-title">📝 PlanGeneratorAgent</div>
+                    <div class="card-content">
+                        <p><strong>职责：</strong>方案生成</p>
+                        <p><strong>工具：</strong>MiMo API</p>
+                        <p><strong>输入：</strong>真实POI+约束</p>
+                        <p><strong>输出：</strong>Top-3方案</p>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-title">🔧 ExceptionRecoveryAgent</div>
+                    <div class="card-content">
+                        <p><strong>职责：</strong>异常恢复</p>
+                        <p><strong>工具：</strong>MiMo API</p>
+                        <p><strong>输入：</strong>异常类型</p>
+                        <p><strong>输出：</strong>替代方案</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 配置与密钥 -->
+        <div class="flow-section">
+            <div class="section-title">
+                <span class="icon">🔑</span>
+                配置与密钥管理
+            </div>
+            
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-title">📁 配置文件结构</div>
+                    <div class="code-block">
+<span class="code-comment"># config.example.py（提交到git）</span>
+MIMO_API_KEY = <span class="code-string">"your-mimo-api-key"</span>
+AMAP_WEB_SERVICE_KEY = <span class="code-string">"your-amap-key"</span>
+TAVILY_API_KEY = <span class="code-string">"your-tavily-key"</span>
+AMAP_CITY = <span class="code-string">"大连"</span>
+
+<span class="code-comment"># config.py（加入gitignore）</span>
+MIMO_API_KEY = <span class="code-string">"sk-xxx..."</span>
+AMAP_WEB_SERVICE_KEY = <span class="code-string">"xxx..."</span>
+TAVILY_API_KEY = <span class="code-string">"tvly-xxx..."</span>
+AMAP_CITY = <span class="code-string">"大连"</span>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-title">⚙️ 启动流程</div>
+                    <div class="card-content">
+                        <ol>
+                            <li>复制 config.example.py → config.py</li>
+                            <li>填写真实密钥到 config.py</li>
+                            <li>运行脚本生成 Spring Boot 配置</li>
+                            <li>启动后端服务</li>
+                            <li>启动前端服务</li>
+                        </ol>
+                        <div class="highlight warning">
+                            <div class="highlight-title">⚠️ 安全提醒</div>
+                            <p>config.py 必须加入 .gitignore，不能提交到代码仓库！</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 失败策略 -->
+        <div class="flow-section">
+            <div class="section-title">
+                <span class="icon">🛡️</span>
+                失败策略
+            </div>
+            
+            <table class="comparison-table">
+                <thead>
+                    <tr>
+                        <th>失败场景</th>
+                        <th>处理方式</th>
+                        <th>返回内容</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>MiMo API调用失败</td>
+                        <td>降级到关键词匹配</td>
+                        <td>使用简化意图继续</td>
+                    </tr>
+                    <tr>
+                        <td>高德API失败/Key缺失</td>
+                        <td>返回中文阻断提示</td>
+                        <td>"抱歉，暂时无法获取地点信息，请稍后重试"</td>
+                    </tr>
+                    <tr>
+                        <td>Tavily API失败</td>
+                        <td>跳过联网核验</td>
+                        <td>继续流程，trace记录</td>
+                    </tr>
+                    <tr>
+                        <td>POI结果为空</td>
+                        <td>返回中文阻断提示</td>
+                        <td>"抱歉，未找到符合条件的地点"</td>
+                    </tr>
+                    <tr>
+                        <td>LLM输出不合规</td>
+                        <td>返回中文阻断提示</td>
+                        <td>"抱歉，方案生成失败，请重试"</td>
+                    </tr>
+                    <tr>
+                        <td>餐厅无座位</td>
+                        <td>自动替换餐厅</td>
+                        <td>返回替代餐厅</td>
+                    </tr>
+                    <tr>
+                        <td>活动无票</td>
+                        <td>自动替换活动</td>
+                        <td>返回替代活动</td>
+                    </tr>
+                    <tr>
+                        <td>行程超时</td>
+                        <td>缩短可选活动</td>
+                        <td>返回调整后方案</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        
+        <!-- 验收标准 -->
+        <div class="flow-section">
+            <div class="section-title">
+                <span class="icon">✅</span>
+                验收标准
+            </div>
+            
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-value">0</div>
+                    <div class="stat-label">英文文案</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">0</div>
+                    <div class="stat-label">Seed假数据</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">100%</div>
+                    <div class="stat-label">中文覆盖</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">≤10s</div>
+                    <div class="stat-label">方案生成</div>
+                </div>
+            </div>
+            
+            <div class="grid-2">
+                <div class="card">
+                    <div class="card-title">✅ 必须通过</div>
+                    <div class="card-content">
+                        <ul>
+                            <li>正常接口返回中不能出现英文展示文案</li>
+                            <li>正常接口不能出现seed地点</li>
+                            <li>trace能看到MiMo、Tavily、高德的调用状态</li>
+                            <li>真实key配置后，Top-3中的地点必须来自高德</li>
+                            <li>接口测试仍可通过，mock只在测试profile中启用</li>
+                        </ul>
+                    </div>
+                </div>
+                
+                <div class="card">
+                    <div class="card-title">📊 性能指标</div>
+                    <div class="card-content">
+                        <ul>
+                            <li>方案生成 ≤10秒</li>
+                            <li>工具响应 ≤3秒</li>
+                            <li>端到端流程 ≤2分钟</li>
+                            <li>Pass@1成功率 ≥80%</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 开发流程 -->
+        <div class="flow-section">
+            <div class="section-title">
+                <span class="icon">🚀</span>
+                开发流程（优先级）
+            </div>
+            
+            <div class="timeline">
+                <div class="timeline-item">
+                    <div class="timeline-time">P0 - 立即完成（本周）</div>
+                    <div class="card-content">
+                        <ol>
+                            <li>删除SeedData.java中的硬编码数据</li>
+                            <li>集成MiMo API进行意图解析</li>
+                            <li>集成高德API获取真实POI</li>
+                            <li>所有输出改为中文</li>
+                            <li>失败时返回中文阻断提示</li>
+                        </ol>
+                    </div>
+                </div>
+                
+                <div class="timeline-item">
+                    <div class="timeline-time">P1 - 本周完成</div>
+                    <div class="card-content">
+                        <ol>
+                            <li>集成Tavily进行联网核验</li>
+                            <li>集成高德路线API计算真实耗时</li>
+                            <li>实现中文校验器和防编造校验器</li>
+                            <li>前端UI升级（参考shadcn/ui）</li>
+                        </ol>
+                    </div>
+                </div>
+                
+                <div class="timeline-item">
+                    <div class="timeline-time">P2 - 下周完成</div>
+                    <div class="card-content">
+                        <ol>
+                            <li>多Agent协作架构</li>
+                            <li>异常恢复机制完善</li>
+                            <li>性能优化（缓存、异步）</li>
+                            <li>完整的Demo演示流程</li>
+                        </ol>
+                    </div>
+                </div>
+                
+                <div class="timeline-item">
+                    <div class="timeline-time">P3 - 未来规划</div>
+                    <div class="card-content">
+                        <ol>
+                            <li>用户系统（登录、历史）</li>
+                            <li>真实订单集成</li>
+                            <li>分享系统（微信卡片）</li>
+                            <li>商业化（佣金、广告）</li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Footer -->
+        <div style="text-align: center; color: white; margin-top: 40px; opacity: 0.8;">
+            <p>📅 生成时间：2026-05-28</p>
+            <p>基于项目代码分析 + 市场调研 + 竞品研究</p>
+        </div>
+    </div>
+</body>
+</html>

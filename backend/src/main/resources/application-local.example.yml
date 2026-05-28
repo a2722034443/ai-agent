@@ -1,0 +1,26 @@
+external:
+  amap:
+    enabled: true
+    base-url: https://restapi.amap.com
+    web-service-key: ${AMAP_WEB_SERVICE_KEY:replace-with-amap-web-service-key}
+    js-api-key: ${AMAP_JS_API_KEY:replace-only-when-frontend-map-is-needed}
+    js-security-code: ${AMAP_JS_SECURITY_CODE:replace-only-when-frontend-map-is-needed}
+    city: 大连
+    default-origin: 121.588000,38.883000
+    timeout-ms: 3000
+  search:
+    enabled: true
+    provider: tavily
+    base-url: https://api.tavily.com
+    tavily-api-key: ${TAVILY_API_KEY:replace-with-tavily-api-key}
+    max-results: 5
+    timeout-ms: 3000
+  llm:
+    enabled: true
+    provider: mimo
+    api-key: ${MIMO_API_KEY:replace-with-mimo-api-key}
+    base-url: ${MIMO_BASE_URL:https://token-plan-cn.xiaomimimo.com/v1}
+    model: ${MIMO_MODEL:mimo-v2.5-pro}
+    max-tokens: ${MIMO_MAX_TOKENS:4096}
+    temperature: ${MIMO_TEMPERATURE:0.1}
+    timeout-ms: ${MIMO_TIMEOUT_MS:30000}

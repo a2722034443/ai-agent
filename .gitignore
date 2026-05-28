@@ -1,0 +1,9 @@
+node_modules/
+dist/
+target/
+.idea/
+.vscode/
+.env
+*.log
+config.py
+backend/src/main/resources/application-local.yml
