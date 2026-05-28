@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>local-life-agent 后端与 Agent 逻辑方案</title>
+  <style>
+    body { font-family: system-ui, "Microsoft YaHei", sans-serif; max-width: 1080px; margin: 32px auto; line-height: 1.7; color: #172033; }
+    h1, h2 { color: #0f172a; }
+    .warn { background:#fff7ed; border-left:4px solid #f97316; padding:12px 16px; }
+    .ok { background:#ecfdf5; border-left:4px solid #10b981; padding:12px 16px; }
+    .grid { display:grid; grid-template-columns: repeat(2, 1fr); gap:16px; }
+    .card { border:1px solid #d8dee8; padding:16px; border-radius:8px; }
+    code { background:#f1f5f9; padding:2px 5px; border-radius:4px; }
+  </style>
+</head>
+<body>
+  <h1>local-life-agent 真实 Agent 化思路</h1>
+
+  <div class="warn">
+    当前问题：系统能跑通，但不是合格 Agent。正常开发链路用了种子地点、英文文案、mock fallback，
+    这会导致用户看到虚假的地点和英文内容，必须重构。
+  </div>
+
+  <h2>一、核心原则</h2>
+  <ul>
+    <li>正常开发与用户体验环境：只能使用真实高德、Tavily、MiMo 结果，不允许 seed 地点。</li>
+    <li>测试环境：允许 mock 地点、mock 路线、mock 订单，但必须隔离在 test profile。</li>
+    <li>所有返回给前端的可见内容必须是中文。</li>
+    <li>如果真实服务不可用或候选地点不足，不编造方案，返回中文阻断提示。</li>
+  </ul>
+
+  <h2>二、Agent 与 LLM 设计</h2>
+  <div class="grid">
+    <div class="card">
+      <h3>LLM 数量</h3>
+      <p>v1 使用 1 个 LLM 接入：MiMo。</p>
+      <p>默认模型：<code>mimo-v2.5-pro</code>。</p>
+      <p>理由：它适合复杂 Agent、工具调用、结构化输出。首字时间通过流式响应和短上下文优化。</p>
+    </div>
+    <div class="card">
+      <h3>Agent 数量</h3>
+      <p>不是每个 Agent 一个模型，而是多个 Agent 角色共享 MiMo。</p>
+      <p>核心 Agent：需求解析、搜索核验、POI 候选、路线规划、方案生成、异常恢复、执行反馈。</p>
+    </div>
+  </div>
+
+  <h2>三、运行链路</h2>
+  <ol>
+    <li>用户输入中文需求。</li>
+    <li>需求解析 Agent 调 MiMo，输出结构化 JSON：人数、时间、城市、出发点、硬约束、偏好。</li>
+    <li>联网核验 Agent 调 Tavily，查近期活动、口碑、排队、闭店、天气等信息。</li>
+    <li>POI Agent 调高德 Web 服务，根据真实关键词和范围检索地点。</li>
+    <li>路线 Agent 调高德距离/路线接口，计算真实距离和耗时。</li>
+    <li>方案生成 Agent 调 MiMo，只允许基于真实候选地点生成 Top-3 中文方案。</li>
+    <li>中文校验器和防编造校验器检查输出；失败则阻断，不返回假方案。</li>
+    <li>用户确认后，订座、购票、配送暂时 mock，但订单和分享文案必须中文。</li>
+  </ol>
+
+  <h2>四、配置与密钥</h2>
+  <ul>
+    <li>人工填写入口：<code>config.py</code>，该文件加入 gitignore，不提交真实密钥。</li>
+    <li>示例文件：<code>config.example.py</code>，只保留占位符。</li>
+    <li>启动时由脚本生成 Spring Boot 可读取的本地配置。</li>
+    <li>需要的密钥：MiMo API Key、高德 Web 服务 Key、Tavily API Key。</li>
+    <li>高德 JS Key 暂时不需要，只有前端展示真实地图时再接。</li>
+  </ul>
+
+  <h2>五、失败策略</h2>
+  <div class="ok">
+    没有真实地点、key 缺失、API 超时、返回为空、LLM 输出不合规时：
+    正常环境返回中文阻断信息和 trace，不使用 seed 数据。
+    只有 test profile 可以使用 mock。
+  </div>
+
+  <h2>六、验收标准</h2>
+  <ul>
+    <li>正常接口返回中不能出现英文展示文案。</li>
+    <li>正常接口不能出现 seed 地点。</li>
+    <li>trace 能看到 MiMo、Tavily、高德的调用状态。</li>
+    <li>真实 key 配置后，Top-3 中的地点必须来自高德或可追踪的真实来源。</li>
+    <li>接口测试仍可通过，但 mock 只在测试 profile 中启用。</li>
+  </ul>
+</body>
+</html>

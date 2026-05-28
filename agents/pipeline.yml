@@ -1,0 +1,36 @@
+name: local-life-agent-web
+mode: real-agent
+steps:
+  - id: project-management
+    prompt: project-management.prompt.md
+    purpose: 检查项目流程、风险、配置和验收证据。
+  - id: intent-parser
+    prompt: requirement-analysis.prompt.md
+    tool: IntentParserAgent
+    provider: mimo
+    purpose: 使用 MiMo 将中文自然语言需求解析成结构化意图。
+  - id: search-verifier
+    tool: SearchVerifierAgent
+    provider: tavily
+    purpose: 联网核验近期活动、口碑、排队、天气等上下文；失败时记录 trace 并跳过。
+  - id: poi-search
+    tool: AmapPoiSearchTool
+    provider: amap
+    purpose: 使用高德 Web 服务获取真实 POI；正常环境失败时中文阻断，不使用 mock。
+  - id: route-optimizer
+    prompt: route-planner.prompt.md
+    tool: AmapRouteEstimateTool
+    provider: amap
+    purpose: 使用高德路线接口计算真实距离与耗时，保护 4-6 小时约束。
+  - id: plan-generator
+    prompt: product-planning.prompt.md
+    tool: PlanGeneratorAgent
+    provider: mimo
+    purpose: 只基于真实候选地点生成 Top-3 中文方案。
+  - id: validation
+    tool: PlanValidationService
+    purpose: 校验中文输出与防编造，地点必须来自高德 POI。
+  - id: execution
+    prompt: execution.prompt.md
+    tool: BookingTool
+    purpose: 用户确认后生成中文 mock 订座、购票、配送和分享消息。

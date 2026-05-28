@@ -1,0 +1,56 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: local-life-agent
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/local_life_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
+    username: ${DB_USER:agent}
+    password: ${DB_PASSWORD:agentpass}
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
+app:
+  session-ttl-hours: 24
+  frontend-origin: ${FRONTEND_ORIGIN:http://localhost:5173}
+  allow-mock-poi: ${ALLOW_MOCK_POI:false}
+
+external:
+  amap:
+    enabled: ${AMAP_ENABLED:true}
+    base-url: ${AMAP_BASE_URL:https://restapi.amap.com}
+    web-service-key: ${AMAP_WEB_SERVICE_KEY:}
+    js-api-key: ${AMAP_JS_API_KEY:}
+    js-security-code: ${AMAP_JS_SECURITY_CODE:}
+    city: ${AMAP_CITY:大连}
+    default-origin: ${AMAP_DEFAULT_ORIGIN:121.588000,38.883000}
+    timeout-ms: ${AMAP_TIMEOUT_MS:3000}
+  search:
+    enabled: ${SEARCH_ENABLED:true}
+    provider: ${SEARCH_PROVIDER:tavily}
+    base-url: ${TAVILY_BASE_URL:https://api.tavily.com}
+    tavily-api-key: ${TAVILY_API_KEY:}
+    max-results: ${SEARCH_MAX_RESULTS:5}
+    timeout-ms: ${SEARCH_TIMEOUT_MS:3000}
+  llm:
+    enabled: ${MIMO_ENABLED:true}
+    provider: ${LLM_PROVIDER:mimo}
+    api-key: ${MIMO_API_KEY:}
+    base-url: ${MIMO_BASE_URL:https://token-plan-cn.xiaomimimo.com/v1}
+    model: ${MIMO_MODEL:mimo-v2.5-pro}
+    max-tokens: ${MIMO_MAX_TOKENS:4096}
+    temperature: ${MIMO_TEMPERATURE:0.1}
+    timeout-ms: ${MIMO_TIMEOUT_MS:30000}
+
+agent:
+  pipeline: ${AGENT_PIPELINE_PATH:../agents/pipeline.yml}
