@@ -101,9 +101,10 @@ public class IntentParserAgent {
 
     private Map<String, Object> location(String text, boolean nearby) {
         Map<String, Object> location = new LinkedHashMap<>();
-        location.put("city", text.contains("大连") ? "大连" : null);
-        location.put("district", text.contains("星海") ? "星海广场" : null);
-        location.put("radius", nearby || text.contains("星海") ? "nearby" : "city");
+        String city = extractCityHint(text);
+        location.put("city", city.isBlank() ? null : city);
+        location.put("district", extractLocationHint(text, city));
+        location.put("radius", nearby ? "nearby" : "city");
         return location;
     }
 
@@ -277,6 +278,42 @@ public class IntentParserAgent {
             }
         }
         return false;
+    }
+
+    private String extractLocationHint(String text, String city) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        if (text.contains("我附近") || text.contains("当前位置") || text.equals("附近")) {
+            return null;
+        }
+        java.util.regex.Matcher matcher = java.util.regex.Pattern
+                .compile("([\\u4e00-\\u9fa5A-Za-z0-9]{2,24}(广场|公园|大学|商场|中心|车站|火车站|地铁站|机场|景区|街|路|区|县|镇|商圈))")
+                .matcher(text);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+        return city.isBlank() ? null : city;
+    }
+
+    private String extractCityHint(String text) {
+        String value = text == null ? "" : text;
+        java.util.regex.Matcher explicit = java.util.regex.Pattern
+                .compile("([\\u4e00-\\u9fa5]{2,12}?市)")
+                .matcher(value);
+        if (explicit.find()) {
+            return explicit.group(1).replace("市", "");
+        }
+        for (String city : List.of(
+                "北京", "上海", "天津", "重庆", "广州", "深圳", "杭州", "南京", "苏州", "成都", "武汉", "西安",
+                "长沙", "郑州", "青岛", "济南", "厦门", "福州", "宁波", "无锡", "合肥", "昆明", "南昌", "南宁",
+                "贵阳", "太原", "石家庄", "沈阳", "长春", "哈尔滨", "大连", "珠海", "佛山", "东莞", "泉州",
+                "洛阳", "海口", "三亚", "乌鲁木齐", "兰州", "银川", "西宁", "拉萨", "呼和浩特")) {
+            if (value.contains(city)) {
+                return city;
+            }
+        }
+        return "";
     }
 
     private String safeSnippet(String message) {

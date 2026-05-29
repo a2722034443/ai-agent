@@ -79,10 +79,12 @@ public class WebSearchTool {
 
     private String buildQuery(Map<String, Object> intent, String message) {
         Map<String, Object> location = castMap(intent.get("location"));
-        String city = String.valueOf(location.getOrDefault("city", "大连"));
+        String city = String.valueOf(location.getOrDefault("city", ""));
         String district = String.valueOf(location.getOrDefault("district", ""));
         String scenario = scenarioText(String.valueOf(intent.getOrDefault("scenario", "本地生活")));
-        String area = (district.isBlank() || "null".equals(district)) ? city : city + " " + district;
+        String area = !city.isBlank() && !"null".equals(city)
+                ? ((district.isBlank() || "null".equals(district)) ? city : city + " " + district)
+                : ((district.isBlank() || "null".equals(district) || district.contains("当前位置")) ? "" : district);
         return area + " " + scenario + " 营业 排队 评价 近期活动 " + safeSnippet(message);
     }
 

@@ -1,76 +1,66 @@
 <template>
   <main class="app-shell">
-    <aside class="workspace-rail">
-      <div class="brand-row">
-        <span class="brand-mark">本</span>
-        <div>
-          <strong>本地生活助手</strong>
-          <p>真实地点 · 多角色编排</p>
+    <section class="workspace">
+      <header class="app-header">
+        <div class="brand-lockup">
+          <span class="brand-mark">本</span>
+          <div>
+            <strong>本地生活 Agent</strong>
+            <p>真实地点编排台</p>
+          </div>
         </div>
-      </div>
 
-      <nav class="rail-nav" aria-label="工作区">
-        <button :class="{ active: view === 'compose' }" @click="view = 'compose'">需求</button>
-        <button :class="{ active: view === 'trace' }" @click="view = 'trace'" :disabled="!trace.length">链路</button>
-        <button :class="{ active: view === 'result' }" @click="view = 'result'" :disabled="!options.length">方案</button>
-      </nav>
+        <nav class="view-tabs" aria-label="视图">
+          <button :class="{ active: view === 'compose' }" @click="view = 'compose'">需求</button>
+          <button :class="{ active: view === 'trace' }" @click="view = 'trace'" :disabled="!trace.length">链路</button>
+          <button :class="{ active: view === 'result' }" @click="view = 'result'" :disabled="!options.length">方案</button>
+        </nav>
 
-      <section class="system-state">
-        <div>
-          <span>会话</span>
-          <strong>{{ token ? '已创建' : '未创建' }}</strong>
-        </div>
-        <div>
-          <span>数据源</span>
-          <strong>真实服务</strong>
-        </div>
-        <div>
-          <span>方案数</span>
-          <strong>{{ options.length || 0 }}</strong>
-        </div>
-      </section>
-    </aside>
-
-    <section class="main-stage">
-      <header class="topbar">
-        <div>
-          <p class="caption">规划控制台</p>
-          <h1>{{ pageTitle }}</h1>
-        </div>
-        <div class="top-actions">
-          <span :class="['live-dot', loading && 'loading']"></span>
-          <span>{{ loading ? loadingText : '就绪' }}</span>
+        <div class="run-state">
+          <span :class="['run-dot', loading && 'active']"></span>
+          <strong>{{ loading ? loadingText : '就绪' }}</strong>
         </div>
       </header>
 
-      <section v-if="view === 'compose'" class="compose-grid">
-        <div class="input-pane">
-          <div class="field-row">
+      <section class="hero-workbench">
+        <div class="hero-copy">
+          <p class="eyebrow">多 Agent 真实规划</p>
+          <h1>{{ pageTitle }}</h1>
+          <p>{{ pageSubtitle }}</p>
+        </div>
+        <div class="hero-metrics">
+          <div>
+            <span>会话</span>
+            <strong>{{ token ? '已连接' : '待创建' }}</strong>
+          </div>
+          <div>
+            <span>方案</span>
+            <strong>{{ options.length || planCount }} 套</strong>
+          </div>
+          <div>
+            <span>链路</span>
+            <strong>{{ trace.length || 0 }} 步</strong>
+          </div>
+        </div>
+      </section>
+
+      <section v-if="view === 'compose'" class="compose-layout">
+        <section class="request-panel">
+          <div class="panel-title">
+            <div>
+              <p class="eyebrow">输入</p>
+              <h2>需求任务</h2>
+            </div>
+            <button class="ghost-button" @click="login" :disabled="loading">
+              {{ token ? '刷新会话' : '创建会话' }}
+            </button>
+          </div>
+
+          <div class="identity-row">
             <label>
               <span>称呼</span>
-              <input v-model="nickname" placeholder="例如：体验用户" />
+              <input v-model="nickname" placeholder="体验用户" />
             </label>
-            <button class="secondary" @click="login" :disabled="loading">
-              {{ token ? '更新会话' : '创建会话' }}
-            </button>
-          </div>
-
-          <label class="message-box">
-            <span>你的需求</span>
-            <textarea
-              v-model="message"
-              rows="9"
-              placeholder="例如：今天下午在大连星海广场附近，两个大人一个孩子，预算600元，想安排亲子活动和晚餐，时间4小时左右"
-            />
-          </label>
-
-          <div class="quick-row">
-            <button v-for="sample in samples" :key="sample.label" class="text-button" @click="message = sample.text">
-              {{ sample.label }}
-            </button>
-          </div>
-
-          <div class="preference-grid">
             <label>
               <span>方案数量</span>
               <select v-model.number="planCount">
@@ -78,7 +68,7 @@
               </select>
             </label>
             <label>
-              <span>行程密度</span>
+              <span>密度</span>
               <select v-model="stopCountPreference">
                 <option value="标准">标准</option>
                 <option value="简洁">简洁</option>
@@ -87,156 +77,195 @@
             </label>
           </div>
 
+          <label class="message-box">
+            <span>自然语言需求</span>
+            <textarea
+              v-model="message"
+              rows="8"
+              placeholder="例如：今天下午2点在杭州西湖附近，两个人，预算600元，想轻松逛逛再吃晚餐，时间3小时左右"
+            />
+          </label>
+
+          <div class="sample-strip">
+            <button v-for="sample in samples" :key="sample.label" @click="message = sample.text">
+              {{ sample.label }}
+            </button>
+          </div>
+
           <section v-if="clarificationFields.length" class="clarification-panel">
             <div class="clarification-head">
-              <p class="caption">需要确认</p>
-              <h2>补齐关键条件后再规划</h2>
-              <p>{{ clarification.message }}</p>
+              <span>Agent 追问</span>
+              <strong>{{ clarification.message }}</strong>
             </div>
-            <div class="clarification-grid">
-              <div v-for="field in clarificationFields" :key="field.key" class="clarification-card">
-                <div class="card-index">{{ fieldIndex(field) }}</div>
-                <div class="card-copy">
-                  <strong>{{ field.label }}</strong>
-                  <p>{{ field.question }}</p>
+            <div class="clarification-list">
+              <article v-for="field in clarificationFields" :key="field.key" class="clarification-item">
+                <div class="field-copy">
+                  <span>{{ fieldIndex(field) }}</span>
+                  <div>
+                    <strong>{{ field.label }}</strong>
+                    <p>{{ field.question }}</p>
+                  </div>
                 </div>
-                <div class="choice-grid">
+                <div v-if="(field.suggestions || []).length" class="choice-strip">
                   <button
                     v-for="(suggestion, idx) in field.suggestions || []"
                     :key="`${field.key}-${suggestion}`"
-                    :class="['choice-button', clarificationAnswers[field.key] === suggestion && 'selected']"
+                    :class="{ selected: clarificationAnswers[field.key] === suggestion }"
                     @click="clarificationAnswers[field.key] = suggestion"
                   >
-                    <span>{{ choiceLabel(idx) }}</span>
-                    {{ suggestion }}
+                    <b>{{ choiceLabel(idx) }}</b>{{ suggestion }}
                   </button>
                 </div>
-                <input v-model="clarificationAnswers[field.key]" :placeholder="`自定义${field.label}`" />
-              </div>
+                <div v-else-if="field.key === 'location'" class="field-helper">
+                  需要真实城市、地标或浏览器定位；不会默认使用任何城市。
+                </div>
+                <button
+                  v-if="field.key === 'location'"
+                  class="location-button"
+                  type="button"
+                  @click="useBrowserLocation"
+                  :disabled="loading || locating"
+                >
+                  {{ locating ? '定位中' : '使用当前位置' }}
+                </button>
+                <input v-model="clarificationAnswers[field.key]" :placeholder="customPlaceholder(field)" />
+              </article>
             </div>
-            <button class="primary" @click="submitClarification" :disabled="loading">补齐后生成</button>
+            <button class="primary-button wide" @click="submitClarification" :disabled="loading">补齐后生成</button>
           </section>
 
-          <div class="submit-row">
-            <button class="primary" @click="plan" :disabled="!canPlan">
+          <div class="action-bar">
+            <button class="primary-button" @click="plan" :disabled="!canPlan">
               {{ loading ? '生成中' : '生成真实方案' }}
             </button>
-            <p>正常模式只使用真实高德、联网搜索和大模型；失败会中文阻断，不编造地点。</p>
+            <span v-if="error" class="error-line">{{ error }}</span>
           </div>
+        </section>
 
-          <p v-if="error" class="error-line">{{ error }}</p>
-        </div>
-
-        <aside class="brief-pane">
-          <div class="metric-line">
-            <span>当前令牌</span>
-            <code>{{ token ? '已保存' : '等待创建' }}</code>
+        <aside class="agent-panel">
+          <div class="panel-title">
+            <div>
+              <p class="eyebrow">编排</p>
+              <h2>Agent 链路</h2>
+            </div>
           </div>
-          <div class="metric-line">
-            <span>当前计划</span>
-            <code>{{ currentPlanId ? '已生成' : '未生成' }}</code>
-          </div>
-          <div class="metric-line">
-            <span>执行策略</span>
-            <code>真实规划 / 模拟执行</code>
-          </div>
+          <ol class="agent-ladder">
+            <li v-for="(step, index) in agentSteps" :key="step.name" :class="{ done: traceToolNames.has(step.tool), active: loading && index === activeAgentIndex }">
+              <span>{{ index + 1 }}</span>
+              <div>
+                <strong>{{ step.name }}</strong>
+                <p>{{ step.desc }}</p>
+              </div>
+            </li>
+          </ol>
         </aside>
       </section>
 
-      <section v-if="view === 'result'" class="result-view">
-        <section v-if="warnings.length" class="warning-panel">
-          <div v-for="warning in warnings" :key="warning" class="warning-item">
-            {{ warning }}
-          </div>
-        </section>
+      <section v-if="view === 'result'" class="result-layout">
+        <aside class="insight-column">
+          <section v-if="warnings.length" class="notice-panel">
+            <strong>风险提示</strong>
+            <p v-for="warning in warnings" :key="warning">{{ warning }}</p>
+          </section>
 
-        <section v-if="weatherInfo" class="weather-panel">
-          <div>
+          <section class="weather-panel">
             <span>天气</span>
-            <strong>{{ weatherInfo.weather || '暂不可用' }}</strong>
-          </div>
-          <div>
-            <span>温度</span>
-            <strong>{{ weatherInfo.temperature ? `${weatherInfo.temperature}℃` : '-' }}</strong>
-          </div>
-          <p>{{ weatherInfo.suggestion || '建议出发前再次确认天气变化。' }}</p>
-        </section>
+            <strong>{{ weatherInfo?.weather || '暂不可用' }}</strong>
+            <p>{{ weatherInfo?.temperature ? `${weatherInfo.temperature}℃` : '温度待确认' }}</p>
+            <small>{{ weatherInfo?.suggestion || '建议出发前再次确认天气变化。' }}</small>
+          </section>
 
-        <div class="result-toolbar">
-          <div>
-          <p class="caption">{{ options.length }} 套方案</p>
-            <h2>候选方案</h2>
-          </div>
-          <label class="feedback-box">
-            <input v-model="feedback" placeholder="提出调整，例如：预算太高、不要太远、换清淡餐厅" />
-            <button class="secondary" @click="adjustPlan" :disabled="!feedback.trim() || loading">调整</button>
-          </label>
-        </div>
-
-        <div class="plan-table">
-          <article v-for="option in options" :key="option.rank" :class="['plan-row', selectedRank === option.rank && 'selected']">
-            <button class="rank-button" @click="selectedRank = option.rank">{{ option.rank }}</button>
-            <div class="plan-main">
-              <div class="plan-title">
-                <h3>{{ option.tagline || `方案 ${option.rank}` }}</h3>
-                <strong>{{ option.score ?? '-' }}</strong>
-              </div>
-              <div class="plan-meta">
-                <span>{{ formatHours(option.totalMinutes) }}</span>
-                <span>约 {{ formatMoney(option.budgetEstimate) }}</span>
-                <span>{{ option.route?.distanceKm ?? '-' }} 公里</span>
-              </div>
-              <ol class="timeline">
-                <li v-for="item in option.timeline || []" :key="`${option.rank}-${item.time}-${item.name}`">
-                  <time>{{ item.time }}</time>
-                  <div>
-                    <strong>{{ item.name }}</strong>
-                    <p>{{ item.subtype || '地点' }} · {{ item.durationMinutes || '-' }} 分钟 · {{ item.address || '地址待确认' }}</p>
-                  </div>
-                </li>
-              </ol>
-              <div class="reason-line">
-                <span v-for="reason in option.fitReasons || []" :key="reason">{{ reason }}</span>
-              </div>
-              <div class="reason-line muted">
-                <span v-for="risk in option.riskNotes || []" :key="risk">{{ risk }}</span>
-              </div>
-            </div>
-            <button class="primary slim" @click="confirm(option.rank)" :disabled="loading">确认执行</button>
-          </article>
-        </div>
-
-        <section v-if="execution" class="execution-panel">
-          <h2>执行结果</h2>
-          <div class="order-list">
-            <div v-for="order in execution.orders || []" :key="order.orderNo">
-              <strong>{{ order.target }}</strong>
-              <span>{{ order.action }} · {{ order.status }}</span>
-              <code>{{ order.orderNo }}</code>
-            </div>
-          </div>
-          <p>{{ execution.shareMessage }}</p>
-        </section>
-      </section>
-
-      <section v-if="view === 'trace'" class="trace-view">
-        <div class="trace-summary">
-          <div>
-            <span>意图解析</span>
-            <dl class="intent-list">
+          <section class="intent-panel">
+            <strong>需求摘要</strong>
+            <dl>
               <div v-for="row in intentRows" :key="row.label">
                 <dt>{{ row.label }}</dt>
                 <dd>{{ row.value }}</dd>
               </div>
             </dl>
-          </div>
-          <div>
-            <span>链路概览</span>
-            <strong>{{ trace.length }} 步</strong>
-          </div>
-        </div>
+          </section>
+        </aside>
 
-        <div class="trace-table">
+        <section class="plans-panel">
+          <div class="result-toolbar">
+            <div>
+              <p class="eyebrow">{{ options.length }} 套真实候选</p>
+              <h2>方案对比</h2>
+            </div>
+            <label class="feedback-box">
+              <input v-model="feedback" placeholder="预算太高、不要太远、换清淡餐厅" />
+              <button class="ghost-button" @click="adjustPlan" :disabled="!feedback.trim() || loading">调整</button>
+            </label>
+          </div>
+
+          <div class="plan-stack">
+            <article v-for="option in options" :key="option.rank" :class="['plan-item', selectedRank === option.rank && 'selected']">
+              <button class="rank-chip" @click="selectedRank = option.rank">{{ option.rank }}</button>
+              <div class="plan-content">
+                <div class="plan-heading">
+                  <div>
+                    <h3>{{ option.tagline || `方案 ${option.rank}` }}</h3>
+                    <p>{{ option.name || '真实可行方案' }}</p>
+                  </div>
+                  <strong>{{ option.score ?? '-' }}</strong>
+                </div>
+
+                <div class="plan-stats">
+                  <span>{{ formatHours(option.totalMinutes) }}</span>
+                  <span>约 {{ formatMoney(option.budgetEstimate) }}</span>
+                  <span>{{ option.route?.distanceKm ?? '-' }} 公里</span>
+                </div>
+
+                <ol class="timeline">
+                  <li v-for="item in option.timeline || []" :key="`${option.rank}-${item.time}-${item.name}`">
+                    <time>{{ item.time }}</time>
+                    <div>
+                      <strong>{{ item.name }}</strong>
+                      <p>{{ item.subtype || '地点' }} · {{ item.durationMinutes || '-' }} 分钟 · {{ item.address || '地址待确认' }}</p>
+                    </div>
+                  </li>
+                </ol>
+
+                <div class="tag-row">
+                  <span v-for="reason in option.fitReasons || []" :key="reason">{{ reason }}</span>
+                </div>
+                <div class="tag-row warning">
+                  <span v-for="risk in option.riskNotes || []" :key="risk">{{ risk }}</span>
+                </div>
+              </div>
+              <button class="primary-button confirm-button" @click="confirm(option.rank)" :disabled="loading">确认执行</button>
+            </article>
+          </div>
+
+          <section v-if="execution" class="execution-panel">
+            <h2>执行结果</h2>
+            <div class="order-grid">
+              <div v-for="order in execution.orders || []" :key="order.orderNo">
+                <strong>{{ order.target }}</strong>
+                <span>{{ order.action }} · {{ order.status }}</span>
+                <code>{{ order.orderNo }}</code>
+              </div>
+            </div>
+            <p>{{ execution.shareMessage }}</p>
+          </section>
+        </section>
+      </section>
+
+      <section v-if="view === 'trace'" class="trace-layout">
+        <section class="trace-overview">
+          <div>
+            <p class="eyebrow">解析结果</p>
+            <h2>意图摘要</h2>
+          </div>
+          <dl>
+            <div v-for="row in intentRows" :key="row.label">
+              <dt>{{ row.label }}</dt>
+              <dd>{{ row.value }}</dd>
+            </div>
+          </dl>
+        </section>
+
+        <section class="trace-panel">
           <div class="trace-head">
             <span>工具</span>
             <span>状态</span>
@@ -251,7 +280,7 @@
             <span>{{ item.durationMs }} 毫秒</span>
             <p>{{ summarizeTrace(item) }}</p>
           </div>
-        </div>
+        </section>
       </section>
     </section>
   </main>
@@ -263,12 +292,13 @@ import { confirmPlan, createPlan, createSession, sendFeedback } from './api.js'
 
 const nickname = ref('体验用户')
 const token = ref(localStorage.getItem('lla_token') || '')
-const message = ref('今天下午在大连星海广场附近，两个大人一个孩子，预算600元，想安排亲子活动和晚餐，时间4小时左右')
+const message = ref('想在附近玩玩')
 const feedback = ref('')
 const planCount = ref(3)
 const stopCountPreference = ref('标准')
 const loading = ref(false)
-const loadingText = ref('助手正在编排')
+const locating = ref(false)
+const loadingText = ref('Agent 编排中')
 const error = ref('')
 const currentPlanId = ref('')
 const options = ref([])
@@ -283,13 +313,35 @@ const selectedRank = ref(1)
 const view = ref('compose')
 
 const samples = [
-  { label: '亲子半日', text: '今天下午2点在大连星海广场附近，两个大人一个孩子，预算600元，想安排亲子活动和晚餐，时间4小时左右' },
-  { label: '朋友聚会', text: '今天晚上7点在大连中山区，4个朋友，预算800元，想先逛一个有意思的地方，再吃饭，路线不要太折腾' },
-  { label: '清淡调整', text: '下午想安排文化展览和清淡晚餐，步行距离尽量短，不要太吵' }
+  { label: '附近随逛', text: '想在附近玩玩' },
+  { label: '朋友聚会', text: '今天晚上7点在上海静安寺附近，4个朋友，预算800元，想先逛一个有意思的地方，再吃饭，路线不要太折腾' },
+  { label: '清淡晚餐', text: '今天下午3点在杭州西湖附近，两个人，预算600元，想安排文化展览和清淡晚餐，步行距离尽量短，不要太吵' }
+]
+
+const agentSteps = [
+  { name: '需求澄清', desc: '检查地点、时间、人数、预算、时长', tool: 'IntentParserAgent' },
+  { name: '天气判断', desc: '获取城市天气并影响排序', tool: 'AmapWeatherTool' },
+  { name: '联网核验', desc: '检索评价、排队、近期活动', tool: 'WebSearchTool' },
+  { name: '真实地点', desc: '高德 POI 候选检索', tool: 'AmapPoiSearchTool' },
+  { name: '路线评估', desc: '预筛后计算可执行路线', tool: 'AmapRouteEstimateTool' },
+  { name: '异常恢复', desc: '跳过无座、无票、过远、冲突候选', tool: 'ExceptionRecoveryTool' },
+  { name: '确认执行', desc: '确认后模拟订座、购票、分享', tool: 'BookingTool' }
 ]
 
 const canPlan = computed(() => token.value && message.value.trim() && !loading.value)
 const clarificationFields = computed(() => clarification.value?.fields || [])
+const traceToolNames = computed(() => new Set(trace.value.map(item => item.tool)))
+const activeAgentIndex = computed(() => Math.min(trace.value.length, agentSteps.length - 1))
+const pageTitle = computed(() => {
+  if (view.value === 'trace') return '工具链路与证据'
+  if (view.value === 'result') return '真实候选方案'
+  return '描述你的本地生活需求'
+})
+const pageSubtitle = computed(() => {
+  if (view.value === 'trace') return '每一步调用都会写入状态、耗时、模式和外部服务结果。'
+  if (view.value === 'result') return '方案只使用真实候选地点，数量不足时会说明原因。'
+  return '先补齐关键条件，再查询真实地点、天气、路线并生成可执行方案。'
+})
 const intentRows = computed(() => {
   const group = intent.value.group || {}
   const location = intent.value.location || {}
@@ -303,11 +355,6 @@ const intentRows = computed(() => {
     { label: '时间', value: `${timeWindow.start || '待定'} 至 ${timeWindow.end || '待定'}` },
     { label: '预算', value: budgetText(preferences.budget) }
   ]
-})
-const pageTitle = computed(() => {
-  if (view.value === 'trace') return '执行链路'
-  if (view.value === 'result') return '真实候选方案'
-  return '输入需求并生成规划'
 })
 
 function fieldIndex(field) {
@@ -345,11 +392,16 @@ async function plan() {
     error.value = err.message
   } finally {
     loading.value = false
-    loadingText.value = '助手正在编排'
+    loadingText.value = 'Agent 编排中'
   }
 }
 
 async function submitClarification() {
+  const validationError = validateClarificationAnswers()
+  if (validationError) {
+    error.value = validationError
+    return
+  }
   loading.value = true
   loadingText.value = '补充信息后重新规划'
   error.value = ''
@@ -369,7 +421,7 @@ async function submitClarification() {
     error.value = err.message
   } finally {
     loading.value = false
-    loadingText.value = '助手正在编排'
+    loadingText.value = 'Agent 编排中'
   }
 }
 
@@ -419,6 +471,53 @@ function planPayload() {
     planCount: planCount.value,
     stopCountPreference: stopCountPreference.value
   }
+}
+
+function customPlaceholder(field) {
+  if (field.key === 'location') return '请输入真实城市和地标，例如：杭州西湖附近'
+  if (field.key === 'timeWindow') return '例如：10:00、14:30、晚上7点'
+  if (field.key === 'duration') return '例如：3小时左右、晚饭后结束'
+  if (field.key === 'group') return '例如：我自己、情侣两人、4个朋友'
+  if (field.key === 'budget') return '例如：300、600、1000'
+  if (field.key === 'preferences') return '例如：轻松逛逛和吃饭'
+  return `自定义${field.label}`
+}
+
+function validateClarificationAnswers() {
+  const locationField = clarificationFields.value.find(field => field.key === 'location')
+  if (!locationField) return ''
+  const location = String(clarificationAnswers.value.location || '').trim()
+  if (!location) return '请补充具体地点：城市 + 商圈/地标/地址。'
+  const invalidTemplates = ['我所在城市 + 具体商圈', '我所在城市 + 地铁站/地标', '具体地址或附近道路']
+  if (invalidTemplates.includes(location) || location.includes('+')) {
+    return '地点不能使用示例模板，请填写真实城市和地标，例如：杭州西湖附近。'
+  }
+  if (['我附近', '附近', '在我附近', '当前位置', '当前位置附近'].includes(location)) {
+    return '“附近”需要真实定位。请点击“使用当前位置”，或填写城市和地标，例如：杭州西湖附近。'
+  }
+  return ''
+}
+
+function useBrowserLocation() {
+  if (!navigator.geolocation) {
+    error.value = '当前浏览器不支持定位，请手动填写城市和地标。'
+    return
+  }
+  locating.value = true
+  error.value = ''
+  navigator.geolocation.getCurrentPosition(
+    (position) => {
+      const lng = position.coords.longitude.toFixed(6)
+      const lat = position.coords.latitude.toFixed(6)
+      clarificationAnswers.value.location = `当前位置 ${lng},${lat}`
+      locating.value = false
+    },
+    () => {
+      error.value = '定位未授权或失败，请手动填写城市和地标。'
+      locating.value = false
+    },
+    { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 }
+  )
 }
 
 function formatHours(minutes) {

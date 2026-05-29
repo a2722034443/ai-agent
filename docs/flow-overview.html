@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>本地生活 Agent 总流程</title>
+  <style>
+    :root {
+      font-family: Inter, "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+      color: #17201b;
+      background: #f5f7f4;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background:
+        linear-gradient(140deg, rgba(47, 121, 255, .12), transparent 28%),
+        linear-gradient(220deg, rgba(32, 171, 122, .14), transparent 34%),
+        #f5f7f4;
+    }
+
+    main {
+      width: min(1180px, calc(100% - 32px));
+      margin: 24px auto;
+      border: 1px solid rgba(23, 32, 27, .10);
+      border-radius: 24px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, .68);
+      box-shadow: 0 28px 70px rgba(28, 42, 34, .14);
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 280px;
+      gap: 24px;
+      padding: 44px;
+      background:
+        linear-gradient(120deg, rgba(255, 255, 255, .88), rgba(255, 255, 255, .44)),
+        linear-gradient(135deg, #dfefff 0%, #e7f8ef 52%, #fff6df 100%);
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      margin-top: 10px;
+      font-size: 42px;
+      line-height: 1.1;
+      letter-spacing: 0;
+    }
+
+    header p {
+      margin-top: 14px;
+      max-width: 720px;
+      color: #526059;
+      line-height: 1.75;
+    }
+
+    .eyebrow {
+      color: #2f79ff;
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    .summary {
+      display: grid;
+      gap: 10px;
+    }
+
+    .summary div {
+      border: 1px solid rgba(255, 255, 255, .72);
+      border-radius: 16px;
+      padding: 16px;
+      background: rgba(255, 255, 255, .72);
+    }
+
+    .summary span {
+      display: block;
+      color: #69746d;
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    .summary strong {
+      display: block;
+      margin-top: 8px;
+      font-size: 20px;
+    }
+
+    section {
+      padding: 28px 44px;
+    }
+
+    .flow-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .node {
+      position: relative;
+      min-height: 172px;
+      border: 1px solid rgba(23, 32, 27, .10);
+      border-radius: 18px;
+      padding: 18px;
+      background: rgba(255, 255, 255, .82);
+      box-shadow: 0 18px 44px rgba(28, 42, 34, .08);
+    }
+
+    .node::after {
+      content: "";
+      position: absolute;
+      top: 36px;
+      right: -14px;
+      width: 14px;
+      height: 2px;
+      background: #2f79ff;
+    }
+
+    .node:nth-child(4n)::after,
+    .node:last-child::after {
+      display: none;
+    }
+
+    .node span {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border-radius: 11px;
+      background: #17201b;
+      color: #fff;
+      font-weight: 900;
+    }
+
+    .node h3 {
+      margin-top: 14px;
+      font-size: 18px;
+    }
+
+    .node p {
+      margin-top: 8px;
+      color: #5f6b64;
+      line-height: 1.65;
+      font-size: 14px;
+    }
+
+    .lane-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .lane {
+      border: 1px solid rgba(23, 32, 27, .10);
+      border-radius: 18px;
+      padding: 18px;
+      background: rgba(255, 255, 255, .82);
+    }
+
+    .lane ul {
+      display: grid;
+      gap: 10px;
+      margin: 14px 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .lane li {
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: #eef3ef;
+      color: #425047;
+      font-weight: 800;
+      font-size: 14px;
+    }
+
+    .rules {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 18px;
+    }
+
+    .rule {
+      border-left: 4px solid #2f79ff;
+      border-radius: 14px;
+      padding: 16px;
+      background: #fff;
+    }
+
+    .rule.warning {
+      border-left-color: #ffb020;
+      background: #fff8e8;
+    }
+
+    .rule strong {
+      display: block;
+      margin-bottom: 8px;
+    }
+
+    .rule p {
+      color: #5f6b64;
+      line-height: 1.7;
+    }
+
+    footer {
+      padding: 22px 44px 34px;
+      color: #69746d;
+      line-height: 1.7;
+    }
+
+    @media (max-width: 900px) {
+      header,
+      .flow-grid,
+      .lane-grid,
+      .rules {
+        grid-template-columns: 1fr;
+      }
+
+      .node::after {
+        display: none;
+      }
+
+      header,
+      section,
+      footer {
+        padding-left: 20px;
+        padding-right: 20px;
+      }
+
+      h1 {
+        font-size: 32px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <span class="eyebrow">LOCAL LIFE AGENT FLOW</span>
+        <h1>从用户需求到真实可执行方案的总流程</h1>
+        <p>系统先判断必要条件是否完整；不完整时只追问，不调用外部服务。信息补齐后，再使用高德、天气、联网搜索和后端规则评分生成真实候选方案，并支持确认执行与反馈重算。</p>
+      </div>
+      <div class="summary">
+        <div><span>默认方案</span><strong>3 套，可调 1-5 套</strong></div>
+        <div><span>地点来源</span><strong>高德真实 POI</strong></div>
+        <div><span>路线规模</span><strong>至少 3 个 POI</strong></div>
+      </div>
+    </header>
+
+    <section>
+      <span class="eyebrow">主链路</span>
+      <div class="flow-grid">
+        <article class="node">
+          <span>1</span>
+          <h3>创建会话</h3>
+          <p>前端创建 session，后续请求携带 token，保证多轮补齐和反馈能关联同一轮上下文。</p>
+        </article>
+        <article class="node">
+          <span>2</span>
+          <h3>意图解析</h3>
+          <p>本地规则优先抽取地点、时间、人数、预算、时长、偏好、方案数量，LLM 只做可选增强。</p>
+        </article>
+        <article class="node">
+          <span>3</span>
+          <h3>必要条件检查</h3>
+          <p>缺地点、具体开始时间、同行人、预算、时长或核心需求时返回澄清卡片。</p>
+        </article>
+        <article class="node">
+          <span>4</span>
+          <h3>天气与搜索</h3>
+          <p>高德天气参与风险提示和排序；Tavily 核验营业、排队、评价和近期活动。</p>
+        </article>
+        <article class="node">
+          <span>5</span>
+          <h3>高德 POI 检索</h3>
+          <p>围绕用户指定区域查真实活动、文化、餐饮和补充点，不在正常环境使用种子地点。</p>
+        </article>
+        <article class="node">
+          <span>6</span>
+          <h3>路线预筛与计算</h3>
+          <p>先用直线距离过滤过远组合，再调用高德步行路线；同一段路线在单次规划内缓存。</p>
+        </article>
+        <article class="node">
+          <span>7</span>
+          <h3>评分与校验</h3>
+          <p>后端按距离、预算、天气、偏好、路线耗时和 POI 评分排序，并校验 POI 覆盖。</p>
+        </article>
+        <article class="node">
+          <span>8</span>
+          <h3>确认与反馈</h3>
+          <p>确认后模拟订座、购票、配送和分享；用户反馈会结构化成 patch 后重新规划。</p>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <span class="eyebrow">职责分层</span>
+      <div class="lane-grid">
+        <div class="lane">
+          <h3>Agent 层</h3>
+          <ul>
+            <li>IntentParserAgent：解析需求</li>
+            <li>SearchVerifierAgent：联网核验</li>
+            <li>FeedbackIntentPatchAgent：反馈重算</li>
+            <li>PlanGeneratorAgent：可选润色</li>
+          </ul>
+        </div>
+        <div class="lane">
+          <h3>工具层</h3>
+          <ul>
+            <li>AmapPoiSearchTool：真实地点</li>
+            <li>AmapRouteEstimateTool：真实路线</li>
+            <li>AmapWeatherTool：天气建议</li>
+            <li>MockTools：测试和确认执行</li>
+          </ul>
+        </div>
+        <div class="lane">
+          <h3>控制层</h3>
+          <ul>
+            <li>ClarificationService：必要条件追问</li>
+            <li>PlanningService：组合与排序</li>
+            <li>PlanValidationService：防编造校验</li>
+            <li>ToolTraceService：链路审计</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <span class="eyebrow">关键规则</span>
+      <div class="rules">
+        <div class="rule">
+          <strong>不完整输入先追问</strong>
+          <p>例如“我想在我附近和朋友玩”不会直接规划，而是追问地点、具体时间、人数、预算、时长和核心需求。</p>
+        </div>
+        <div class="rule">
+          <strong>真实候选不足不造假</strong>
+          <p>用户请求 5 套但真实可行方案只有 2 套时，返回 2 套并展示原因；只有 0 套时才中文阻断。</p>
+        </div>
+        <div class="rule warning">
+          <strong>后端允许英文品牌名</strong>
+          <p>真实高德 POI 名称保持原文，不做“禁止英文”校验；只禁止非候选地点和编造地点。</p>
+        </div>
+        <div class="rule warning">
+          <strong>异常覆盖</strong>
+          <p>系统记录无座、无票、路线过远、时间冲突等异常，跳过不合适候选并进入下一组组合。</p>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      目标验收：方案生成尽量控制在 30 秒内，路线阶段控制在 10 秒内，工具调用通常小于 3 秒；端到端保留创建会话、生成方案、确认执行、反馈重算和 trace 审计。
+    </footer>
+  </main>
+</body>
+</html>
