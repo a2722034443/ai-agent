@@ -95,7 +95,7 @@ public class PlanningService {
         Map<String, Object> intent = intentParserAgent.fastParse(session.getId(), message);
         intent = clarificationService.mergeAnswers(intent, request == null ? null : request.clarificationAnswers());
         applyRequestPreferences(intent, request);
-        Map<String, Object> clarification = clarificationService.buildClarification(intent);
+        Map<String, Object> clarification = clarificationService.buildClarification(session.getId(), intent, message);
         if (!clarification.isEmpty()) {
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("options", List.of());
@@ -177,7 +177,7 @@ public class PlanningService {
         PlanSession previous = planSessionRepository.findById(id).orElseThrow();
         feedbackEventRepository.save(new FeedbackEvent(id, message));
         Map<String, Object> previousIntent = fromJson(previous.getIntentJson());
-        Map<String, Object> previousOption = findOption(id, 1);
+        Map<String, Object> previousOption = findOptionOrEmpty(id, 1);
         Map<String, Object> patch = feedbackPatch(id, message, previousIntent, previousOption);
         String combined = previous.getRawInput() + "。用户调整：" + message;
         return createPlan(previous.getSessionToken(), new PlanRequest(combined, intValue(patch.get("requestedPlanCount")),
@@ -722,6 +722,14 @@ public class PlanningService {
                 .findFirst()
                 .map(option -> fromJson(option.getOptionJson()))
                 .orElseThrow();
+    }
+
+    private Map<String, Object> findOptionOrEmpty(UUID id, int rank) {
+        return planOptionRepository.findByPlanSessionIdOrderByRankNo(id).stream()
+                .filter(option -> option.getRankNo() == rank)
+                .findFirst()
+                .map(option -> fromJson(option.getOptionJson()))
+                .orElseGet(LinkedHashMap::new);
     }
 
     private Map<String, Object> tracePayload(ToolCallLog log) {

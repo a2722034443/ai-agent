@@ -35,7 +35,10 @@ public class AmapWeatherTool {
 
     public Map<String, Object> weather(UUID planId, Map<String, Object> intent) {
         ExternalClientProperties.Amap amap = properties.getAmap();
-        String city = city(intent, amap.getCity());
+        String city = city(intent);
+        if (isBlank(city)) {
+            return fallback(planId, "未知城市", "missing_city", "not-called");
+        }
         if (!amap.isEnabled() || isBlank(amap.getWebServiceKey())) {
             return fallback(planId, city, "missing_key_or_disabled", "not-called");
         }
@@ -111,9 +114,9 @@ public class AmapWeatherTool {
         return value instanceof Map<?, ?> ? (Map<String, Object>) value : Map.of();
     }
 
-    private String city(Map<String, Object> intent, String fallback) {
+    private String city(Map<String, Object> intent) {
         Object value = castMap(intent.get("location")).get("city");
-        return isBlank(String.valueOf(value)) || "null".equals(String.valueOf(value)) ? fallback : String.valueOf(value);
+        return isBlank(String.valueOf(value)) || "null".equals(String.valueOf(value)) ? "" : String.valueOf(value);
     }
 
     private String encode(String value) {

@@ -9,7 +9,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -43,7 +42,7 @@ public class SessionService {
         } else {
             try {
                 redisTemplate.opsForValue().set(token, value, Duration.ofHours(ttlHours));
-            } catch (RedisConnectionFailureException e) {
+            } catch (RuntimeException e) {
                 if (!localFallback) {
                     throw e;
                 }
@@ -66,7 +65,7 @@ public class SessionService {
             if (Boolean.TRUE.equals(redisTemplate.hasKey(token))) {
                 return;
             }
-        } catch (RedisConnectionFailureException e) {
+        } catch (RuntimeException e) {
             if (!localFallback) {
                 throw e;
             }

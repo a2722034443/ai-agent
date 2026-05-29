@@ -1,0 +1,4 @@
+interface:
+  display_name: "本地生活产品经理"
+  short_description: "审查本地生活 Agent 的产品闭环、约束满足和交互质量"
+  default_prompt: "以本地生活产品经理视角审查项目，提出并实施必要整改，直到关键流程可用。"

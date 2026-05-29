@@ -8,6 +8,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.localagent.service.MimoClient;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -35,6 +36,9 @@ class ApiControllerTest {
     @MockBean
     private ValueOperations<String, String> valueOperations;
 
+    @MockBean
+    private MimoClient mimoClient;
+
     @Test
     void rejectsMissingSessionToken() throws Exception {
         mockMvc.perform(post("/api/plans")
@@ -49,6 +53,7 @@ class ApiControllerTest {
     void asksForClarificationBeforeCallingRealPlanningWhenRequiredFieldsAreMissing() throws Exception {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.hasKey(anyString())).thenReturn(true);
+        when(mimoClient.complete(anyString(), anyString())).thenThrow(new IllegalStateException("test fallback"));
 
         MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
                         .contentType("application/json")
@@ -71,6 +76,7 @@ class ApiControllerTest {
     void nearbyFriendsRequestStillNeedsConcreteContextBeforePlanning() throws Exception {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.hasKey(anyString())).thenReturn(true);
+        when(mimoClient.complete(anyString(), anyString())).thenThrow(new IllegalStateException("test fallback"));
 
         MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
                         .contentType("application/json")
@@ -97,6 +103,7 @@ class ApiControllerTest {
     void broadAfternoonPeriodStillAsksForExactStartTime() throws Exception {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.hasKey(anyString())).thenReturn(true);
+        when(mimoClient.complete(anyString(), anyString())).thenThrow(new IllegalStateException("test fallback"));
 
         MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
                         .contentType("application/json")
@@ -152,6 +159,184 @@ class ApiControllerTest {
                 .andExpect(jsonPath("$.status").value("READY"))
                 .andExpect(jsonPath("$.intent.time_window.start").value("11:00"))
                 .andExpect(jsonPath("$.clarification.fields[?(@.key=='timeWindow')]").doesNotExist());
+    }
+
+    @Test
+    void vagueNearbyAnswerStillAsksForConcreteLocationAndDynamicOptions() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+        when(mimoClient.complete(anyString(), anyString())).thenReturn("""
+                {
+                  "message": "我还需要确认两个关键信息，补齐后再查真实地点。",
+                  "missingFields": ["location", "timeWindow"],
+                  "fields": [
+                    {
+                      "key": "location",
+                      "label": "地点",
+                      "question": "你现在在哪个城市的哪个商圈、地标或地址附近？",
+                      "type": "text",
+                      "suggestions": [],
+                      "allowCustom": true,
+                      "reason": "我附近无法定位"
+                    },
+                    {
+                      "key": "timeWindow",
+                      "label": "开始时间",
+                      "question": "早上12点表达不清晰，请选择明确开始时间。",
+                      "type": "choice",
+                      "suggestions": ["09:30", "10:00", "10:30"],
+                      "allowCustom": true,
+                      "reason": "时间表达冲突"
+                    }
+                  ]
+                }
+                """);
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = extractJsonString(sessionResult, "token");
+
+        String body = """
+                {
+                  "message": "在我附近，想出去玩玩",
+                  "planCount": 3,
+                  "stopCountPreference": "标准",
+                  "clarificationAnswers": {
+                    "location": "我附近",
+                    "timeWindow": "早上12点",
+                    "duration": "3小时左右",
+                    "group": "情侣两人",
+                    "budget": "600",
+                    "preferences": "亲子活动和晚餐"
+                  }
+                }
+                """;
+
+        mockMvc.perform(post("/api/plans")
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
+                .andExpect(jsonPath("$.options").isEmpty())
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='location')]").exists())
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='timeWindow')]").exists())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+                        .string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("大连"))))
+                .andExpect(jsonPath("$.trace[?(@.tool=='ClarificationAgent' && @.mode=='real')]").exists())
+                .andExpect(jsonPath("$.clarification.fields[0].allowCustom").value(true))
+                .andExpect(jsonPath("$.trace[?(@.tool=='ClarificationAgent')]").exists());
+    }
+
+    @Test
+    void placeholderLocationAnswerStillNeedsClarification() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+        when(mimoClient.complete(anyString(), anyString())).thenThrow(new IllegalStateException("test fallback"));
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = extractJsonString(sessionResult, "token");
+
+        String body = """
+                {
+                  "message": "想在附近玩玩",
+                  "planCount": 3,
+                  "stopCountPreference": "标准",
+                  "clarificationAnswers": {
+                    "location": "我所在城市 + 地铁站/地标",
+                    "timeWindow": "10:00",
+                    "duration": "4小时左右",
+                    "group": "我自己",
+                    "budget": "300",
+                    "preferences": "轻松逛逛和吃饭"
+                  }
+                }
+                """;
+
+        mockMvc.perform(post("/api/plans")
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
+                .andExpect(jsonPath("$.options").isEmpty())
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='location')]").exists());
+    }
+
+    @Test
+    void browserCoordinateLocationCanContinuePlanning() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = extractJsonString(sessionResult, "token");
+
+        String body = """
+                {
+                  "message": "想在附近玩玩",
+                  "planCount": 3,
+                  "stopCountPreference": "标准",
+                  "clarificationAnswers": {
+                    "location": "当前位置 121.588000,38.883000",
+                    "timeWindow": "10:00",
+                    "duration": "4小时左右",
+                    "group": "我自己",
+                    "budget": "300",
+                    "preferences": "轻松逛逛和吃饭"
+                  }
+                }
+                """;
+
+        mockMvc.perform(post("/api/plans")
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("READY"))
+                .andExpect(jsonPath("$.options").isArray())
+                .andExpect(jsonPath("$.intent.location.lng").value(121.588))
+                .andExpect(jsonPath("$.intent.location.lat").value(38.883));
+    }
+
+    @Test
+    void feedbackOnClarificationPlanDoesNotFailWithMissingOption() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+        when(mimoClient.complete(anyString(), anyString())).thenThrow(new IllegalStateException("test fallback"));
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = extractJsonString(sessionResult, "token");
+
+        MvcResult planResult = mockMvc.perform(post("/api/plans")
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content("{\"message\":\"想在附近玩玩\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
+                .andReturn();
+        String planId = extractPlanId(planResult);
+
+        mockMvc.perform(post("/api/plans/{id}/feedback", planId)
+                        .contentType("application/json")
+                        .content("{\"message\":\"预算太高了\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
+                .andExpect(jsonPath("$.clarification.fields").isArray());
     }
 
     @Test
