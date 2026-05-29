@@ -22,7 +22,7 @@ spring:
 
 app:
   session-ttl-hours: 24
-  frontend-origin: ${FRONTEND_ORIGIN:http://localhost:5173}
+  frontend-origin: ${FRONTEND_ORIGIN:http://localhost:5173,http://127.0.0.1:5173}
   allow-mock-poi: ${ALLOW_MOCK_POI:false}
 
 external:

@@ -57,7 +57,7 @@ The project includes `backend/.mvn/settings.xml` and `frontend/.npmrc` so Maven/
 ## Demo Flow
 
 1. Create a session.
-2. Enter: `今天下午带老婆孩子出去玩，孩子5岁，老婆在减肥，别离家太远`.
+2. Enter: `今天下午2点在大连星海广场附近，两个大人一个孩子，预算600元，想安排亲子活动和晚餐，时间4小时左右`.
 3. Review Top-3 plans, trace, constraints and recovery notes.
 4. Confirm one plan.
 5. See Mock orders and share message.

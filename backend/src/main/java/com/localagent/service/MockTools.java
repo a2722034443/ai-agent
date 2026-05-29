@@ -82,7 +82,7 @@ public class MockTools {
             String name = String.valueOf(item.get("name"));
             if ("餐饮".equals(type) || "活动".equals(type) || "dining".equals(type) || "activity".equals(type)) {
                 String action = ("餐饮".equals(type) || "dining".equals(type)) ? "订座" : "购票";
-                String orderNo = "MOCK-" + UUID.randomUUID().toString().substring(0, 8);
+                String orderNo = "模拟单-" + UUID.randomUUID().toString().substring(0, 8);
                 mockOrderRepository.save(new MockOrder(planId, orderNo, action, name, "已确认"));
                 orders.add(Map.of("orderNo", orderNo, "action", action, "target", name, "status", "已确认"));
             }
@@ -93,7 +93,7 @@ public class MockTools {
 
     public Map<String, Object> delivery(UUID planId, Map<String, Object> option) {
         long start = System.currentTimeMillis();
-        String orderNo = "MOCK-" + UUID.randomUUID().toString().substring(0, 8);
+        String orderNo = "模拟单-" + UUID.randomUUID().toString().substring(0, 8);
         String target = String.valueOf(option.get("diningName"));
         mockOrderRepository.save(new MockOrder(planId, orderNo, "配送", target, "已安排"));
         Map<String, Object> output = Map.of("orderNo", orderNo, "target", target, "status", "已安排", "eta", "18:10");
@@ -105,7 +105,7 @@ public class MockTools {
         long start = System.currentTimeMillis();
         String message = "搞定啦！下午14:00出发，先去" + option.get("firstStop") + "，然后去"
                 + option.get("diningName") + "吃饭，最后在" + option.get("lastStop")
-                + "散步。所有预订都已安排好。";
+                + "收尾。所有预订都已安排好。";
         trace(planId, "ShareMessageTool", "ok", start, Map.of("rank", option.get("rank")), Map.of("message", message));
         return message;
     }
@@ -119,7 +119,7 @@ public class MockTools {
 
     public List<Poi> sortCandidates(List<Poi> pois, Map<String, Object> intent) {
         boolean family = "family".equals(intent.get("scenario"));
-        boolean lowCal = ((List<?>) intent.getOrDefault("hard_constraints", List.of())).contains("low_calorie_preferred");
+        boolean lowCal = ((List<?>) intent.getOrDefault("hard_constraints", List.of())).contains("低卡优先");
         return pois.stream()
                 .sorted(Comparator.comparing((Poi poi) -> scorePoi(poi, family, lowCal)).reversed())
                 .toList();

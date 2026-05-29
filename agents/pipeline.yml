@@ -8,11 +8,19 @@ steps:
     prompt: requirement-analysis.prompt.md
     tool: IntentParserAgent
     provider: mimo
-    purpose: 使用 MiMo 将中文自然语言需求解析成结构化意图。
+    purpose: 使用规则优先、MiMo 可选增强的方式将自然语言需求解析成结构化意图；不补默认时间、预算、人数或时长。
+  - id: clarification
+    tool: ClarificationService
+    provider: local
+    purpose: 检查地点、时间、同行人、预算、期望时长和核心需求；缺失时先追问，不调用外部规划工具。
+  - id: weather
+    tool: AmapWeatherTool
+    provider: amap
+    purpose: 使用高德天气接口获取城市天气；失败时记录天气暂不可用并继续规划。
   - id: search-verifier
     tool: SearchVerifierAgent
     provider: tavily
-    purpose: 联网核验近期活动、口碑、排队、天气等上下文；失败时记录 trace 并跳过。
+    purpose: 联网核验近期活动、口碑、排队等上下文；失败时记录 trace 并跳过。
   - id: poi-search
     tool: AmapPoiSearchTool
     provider: amap
@@ -21,15 +29,15 @@ steps:
     prompt: route-planner.prompt.md
     tool: AmapRouteEstimateTool
     provider: amap
-    purpose: 使用高德路线接口计算真实距离与耗时，保护 4-6 小时约束。
+    purpose: 使用高德路线接口计算真实距离与耗时，按用户明确时长或结束时间约束组合路线。
   - id: plan-generator
     prompt: product-planning.prompt.md
     tool: PlanGeneratorAgent
     provider: mimo
-    purpose: 只基于真实候选地点生成 Top-3 中文方案。
+    purpose: 只基于真实候选地点生成用户要求数量的方案；默认 3 套，可在 1-5 套内调整。
   - id: validation
     tool: PlanValidationService
-    purpose: 校验中文输出与防编造，地点必须来自高德 POI。
+    purpose: 校验防编造，地点必须来自高德 POI；真实品牌名和地址允许包含英文、数字和符号。
   - id: execution
     prompt: execution.prompt.md
     tool: BookingTool

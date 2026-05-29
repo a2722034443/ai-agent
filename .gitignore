@@ -7,3 +7,5 @@ target/
 *.log
 config.py
 backend/src/main/resources/application-local.yml
+__pycache__/
+external-repos/

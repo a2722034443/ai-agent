@@ -15,6 +15,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -28,6 +29,7 @@ public class AmapRouteEstimateTool {
     private final ObjectMapper objectMapper;
     private final AmapRequestLimiter requestLimiter;
     private final boolean allowMockPoi;
+    private final Map<UUID, Map<String, Map<String, Object>>> segmentCaches = new ConcurrentHashMap<>();
 
     public AmapRouteEstimateTool(ExternalClientProperties properties, MockTools mockTools,
                                  ToolTraceService traceService, ObjectMapper objectMapper,
@@ -49,8 +51,9 @@ public class AmapRouteEstimateTool {
         try {
             int travelMinutes = 0;
             double distanceKm = 0.0;
+            Map<String, Map<String, Object>> segmentCache = segmentCaches.computeIfAbsent(planId, ignored -> new ConcurrentHashMap<>());
             for (int i = 1; i < stops.size(); i++) {
-                Map<String, Object> segment = walkingSegment(planId, stops.get(i - 1), stops.get(i));
+                Map<String, Object> segment = walkingSegment(planId, stops.get(i - 1), stops.get(i), segmentCache);
                 travelMinutes += ((Number) segment.getOrDefault("durationSeconds", 0)).intValue() / 60;
                 distanceKm += ((Number) segment.getOrDefault("distanceMeters", 0)).doubleValue() / 1000.0;
             }
@@ -70,7 +73,19 @@ public class AmapRouteEstimateTool {
         }
     }
 
-    private Map<String, Object> walkingSegment(UUID planId, Poi from, Poi to) throws Exception {
+    public void clearCache(UUID planId) {
+        if (planId != null) {
+            segmentCaches.remove(planId);
+        }
+    }
+
+    private Map<String, Object> walkingSegment(UUID planId, Poi from, Poi to,
+                                               Map<String, Map<String, Object>> segmentCache) throws Exception {
+        String cacheKey = segmentKey(from, to);
+        Map<String, Object> cached = segmentCache.get(cacheKey);
+        if (cached != null) {
+            return cached;
+        }
         long start = System.currentTimeMillis();
         ExternalClientProperties.Amap amap = properties.getAmap();
         String sourceUrl = amap.getBaseUrl() + DIRECTION_PATH;
@@ -109,7 +124,14 @@ public class AmapRouteEstimateTool {
         output.put("info", body.getOrDefault("info", ""));
         traceService.trace(planId, "AmapRouteEstimateTool", durationSeconds > 0 ? "ok" : "empty", start,
                 Map.of("from", from.getName(), "to", to.getName()), output);
+        if (durationSeconds > 0 && distanceMeters > 0) {
+            segmentCache.put(cacheKey, output);
+        }
         return output;
+    }
+
+    private String segmentKey(Poi from, Poi to) {
+        return from.getLng() + "," + from.getLat() + "->" + to.getLng() + "," + to.getLat();
     }
 
     private Map<String, Object> blockOrMock(UUID planId, List<Poi> stops, String reason, String sourceUrl) {

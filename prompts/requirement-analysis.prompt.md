@@ -5,13 +5,15 @@
 字段：
 - scenario: family | friends | couple | solo | unknown
 - group: total, composition, childAge
-- time_window: start, end, minHours, maxHours
+- time_window: start, end, period, durationMinutes
 - location: city, district, radius
 - hard_constraints: string[]
-- soft_preferences: budget, vibe
+- soft_preferences: budget, budgetAmount, vibe
+- requestedPlanCount: 1-5 或 null
+- requestedStopCount: 3-6 或 null
 
 规则：
 - 孩子、老人、安全、过敏、必须去属于硬约束。
 - 减肥、少折腾、预算属于偏好，除非用户明确说必须。
-- 没有城市时默认“大连”。
-- 没有时间时默认今天下午 14:00-20:00，窗口 4-6 小时。
+- 不要替用户补默认城市、时间、人数、预算或游玩时长；缺失字段用 null。
+- 用户信息不足时交给澄清步骤追问，不提前查地点或生成方案。

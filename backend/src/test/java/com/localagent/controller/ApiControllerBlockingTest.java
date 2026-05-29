@@ -50,7 +50,7 @@ class ApiControllerBlockingTest {
         mockMvc.perform(post("/api/plans")
                         .header("X-Session-Token", token)
                         .contentType("application/json")
-                        .content("{\"message\":\"今天下午带孩子在大连附近玩，晚饭要清淡\"}"))
+                        .content("{\"message\":\"今天下午2点在大连星海广场附近，两个大人一个孩子，预算600元，想安排亲子活动和晚餐，时间4小时左右\"}"))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.status").value("ERROR"))
                 .andExpect(jsonPath("$.provider").value("amap"))

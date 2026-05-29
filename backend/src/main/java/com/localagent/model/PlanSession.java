@@ -24,7 +24,7 @@ public class PlanSession {
     private String rawInput;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
+    @Column(nullable = false, length = 32, columnDefinition = "varchar(32)")
     private PlanStatus status;
 
     @Lob
@@ -70,6 +70,13 @@ public class PlanSession {
         this.intentJson = intentJson;
         this.resultJson = resultJson;
         this.status = PlanStatus.READY;
+        this.updatedAt = Instant.now();
+    }
+
+    public void markNeedsClarification(String intentJson, String resultJson) {
+        this.intentJson = intentJson;
+        this.resultJson = resultJson;
+        this.status = PlanStatus.NEEDS_CLARIFICATION;
         this.updatedAt = Instant.now();
     }
 

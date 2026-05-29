@@ -58,14 +58,19 @@ public class WebSearchTool {
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             Map<String, Object> body = objectMapper.readValue(response.body(), new TypeReference<>() {});
             List<Map<String, Object>> results = castList(body.get("results"));
+            List<Map<String, Object>> filtered = results.stream()
+                    .filter(this::isUsefulResult)
+                    .limit(search.getMaxResults())
+                    .toList();
             Map<String, Object> output = new LinkedHashMap<>(traceService.externalMeta(
                     "tavily", "real", sourceUrl, String.valueOf(response.statusCode())));
             output.put("query", requestBody.get("query"));
-            output.put("count", results.size());
-            output.put("results", results.stream().limit(3).map(this::compactResult).toList());
+            output.put("count", filtered.size());
+            output.put("rawCount", results.size());
+            output.put("results", filtered.stream().limit(3).map(this::compactResult).toList());
             traceService.trace(planId, "WebSearchTool", response.statusCode() < 400 ? "ok" : "external_error", start,
                     Map.of("provider", "tavily", "maxResults", search.getMaxResults()), output);
-            return results;
+            return filtered;
         } catch (Exception e) {
             traceFallback(planId, intent, e.getClass().getSimpleName() + ": " + e.getMessage(), sourceUrl);
             return List.of();
@@ -73,9 +78,12 @@ public class WebSearchTool {
     }
 
     private String buildQuery(Map<String, Object> intent, String message) {
-        String city = String.valueOf(castMap(intent.get("location")).getOrDefault("city", "\u5927\u8fde"));
-        String scenario = String.valueOf(intent.getOrDefault("scenario", "\u672c\u5730\u751f\u6d3b"));
-        return city + " " + scenario + " \u4eca\u5929\u4e0b\u5348 \u4eb2\u5b50 \u670b\u53cb \u6d3b\u52a8 \u9910\u5385 " + safeSnippet(message);
+        Map<String, Object> location = castMap(intent.get("location"));
+        String city = String.valueOf(location.getOrDefault("city", "大连"));
+        String district = String.valueOf(location.getOrDefault("district", ""));
+        String scenario = scenarioText(String.valueOf(intent.getOrDefault("scenario", "本地生活")));
+        String area = (district.isBlank() || "null".equals(district)) ? city : city + " " + district;
+        return area + " " + scenario + " 营业 排队 评价 近期活动 " + safeSnippet(message);
     }
 
     private Map<String, Object> compactResult(Map<String, Object> result) {
@@ -85,6 +93,53 @@ public class WebSearchTool {
         compact.put("score", result.getOrDefault("score", 0));
         compact.put("content", result.getOrDefault("content", ""));
         return compact;
+    }
+
+    private boolean isUsefulResult(Map<String, Object> result) {
+        String title = String.valueOf(result.getOrDefault("title", ""));
+        String url = String.valueOf(result.getOrDefault("url", ""));
+        String content = String.valueOf(result.getOrDefault("content", ""));
+        double score = parseScore(result.get("score"));
+        if (title.isBlank() || url.isBlank() || content.isBlank()) {
+            return false;
+        }
+        if (!(url.startsWith("http://") || url.startsWith("https://"))) {
+            return false;
+        }
+        if (url.endsWith(".xls") || url.endsWith(".xlsx") || url.endsWith(".zip") || url.endsWith(".rar")) {
+            return false;
+        }
+        return score >= 0.08 && !looksBinary(content);
+    }
+
+    private boolean looksBinary(String content) {
+        if (content.length() < 20) {
+            return false;
+        }
+        long suspicious = content.chars()
+                .filter(ch -> ch < 9 || (ch > 13 && ch < 32) || ch == 127 || ch == 65533)
+                .count();
+        return suspicious > 0 || content.chars().filter(ch -> ch == '{' || ch == '}' || ch == '\\').count() > content.length() / 8;
+    }
+
+    private double parseScore(Object value) {
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        try {
+            return Double.parseDouble(String.valueOf(value));
+        } catch (Exception e) {
+            return 0.0;
+        }
+    }
+
+    private String scenarioText(String scenario) {
+        return switch (scenario) {
+            case "family" -> "亲子活动 餐厅";
+            case "friends" -> "朋友聚会 餐厅 娱乐";
+            case "couple" -> "情侣约会 餐厅 展览";
+            default -> "本地活动 餐厅";
+        };
     }
 
     private void traceFallback(UUID planId, Map<String, Object> intent, String reason, String sourceUrl) {

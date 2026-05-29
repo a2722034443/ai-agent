@@ -41,7 +41,7 @@ public class ApiController {
     @PostMapping("/plans")
     public PlanResponse createPlan(@RequestHeader("X-Session-Token") String token, @RequestBody PlanRequest request) {
         sessionService.validate(token);
-        return planningService.createPlan(token, request.message());
+        return planningService.createPlan(token, request);
     }
 
     @GetMapping("/plans/{id}")
