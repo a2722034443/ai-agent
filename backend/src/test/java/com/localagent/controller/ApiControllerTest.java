@@ -46,6 +46,115 @@ class ApiControllerTest {
     }
 
     @Test
+    void asksForClarificationBeforeCallingRealPlanningWhenRequiredFieldsAreMissing() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = extractJsonString(sessionResult, "token");
+
+        mockMvc.perform(post("/api/plans")
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content("{\"message\":\"想今天出去玩一下\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
+                .andExpect(jsonPath("$.options").isEmpty())
+                .andExpect(jsonPath("$.clarification.fields").isArray());
+    }
+
+    @Test
+    void nearbyFriendsRequestStillNeedsConcreteContextBeforePlanning() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = extractJsonString(sessionResult, "token");
+
+        mockMvc.perform(post("/api/plans")
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content("{\"message\":\"我想在我附近 和朋友玩 你看看附近都有啥 推荐一下\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
+                .andExpect(jsonPath("$.options").isEmpty())
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='location')]").exists())
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='timeWindow')]").exists())
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='duration')]").exists())
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='group')]").exists())
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='budget')]").exists());
+    }
+
+    @Test
+    void broadAfternoonPeriodStillAsksForExactStartTime() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = extractJsonString(sessionResult, "token");
+
+        String message = "今天下午在大连星海广场附近，两个大人一个孩子，预算600元，想安排亲子活动和晚餐，时间4小时左右";
+        mockMvc.perform(post("/api/plans")
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content("{\"message\":\"" + message + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
+                .andExpect(jsonPath("$.options").isEmpty())
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='timeWindow')]").exists());
+    }
+
+    @Test
+    void clarificationAnswersAcceptDottedTimeAndContinuePlanning() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = extractJsonString(sessionResult, "token");
+
+        String body = """
+                {
+                  "message": "下午想安排文化展览和清淡晚餐，步行距离尽量短，不要太吵",
+                  "planCount": 5,
+                  "stopCountPreference": "丰富",
+                  "clarificationAnswers": {
+                    "location": "大连金石滩大连民族大学附近",
+                    "timeWindow": "11.00",
+                    "group": "3个男人",
+                    "duration": "4小时左右",
+                    "budget": "300",
+                    "preferences": "文化展览和清淡晚餐"
+                  }
+                }
+                """;
+
+        mockMvc.perform(post("/api/plans")
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("READY"))
+                .andExpect(jsonPath("$.intent.time_window.start").value("11:00"))
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='timeWindow')]").doesNotExist());
+    }
+
+    @Test
     void runsFullPlanExecutionAndFeedbackApiChain() throws Exception {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.hasKey(anyString())).thenReturn(true);
@@ -58,8 +167,7 @@ class ApiControllerTest {
                 .andReturn();
         String token = extractJsonString(sessionResult, "token");
 
-        String familyPlanMessage = "\u4eca\u5929\u4e0b\u5348\u5e26\u8001\u5a46\u5b69\u5b50\u51fa\u53bb\u73a9\uff0c"
-                + "\u5b69\u5b505\u5c81\uff0c\u8001\u5a46\u5728\u51cf\u80a5\uff0c\u522b\u79bb\u5bb6\u592a\u8fdc";
+        String familyPlanMessage = "今天下午2点在大连星海广场附近，两个大人一个孩子，预算600元，想安排亲子活动和晚餐，时间4小时左右";
         MvcResult planResult = mockMvc.perform(post("/api/plans")
                         .header("X-Session-Token", token)
                         .contentType("application/json")

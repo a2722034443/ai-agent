@@ -25,10 +25,11 @@ export async function createSession(nickname) {
   return data
 }
 
-export function createPlan(message) {
+export function createPlan(payload) {
+  const body = typeof payload === 'string' ? { message: payload } : payload
   return request('/api/plans', {
     method: 'POST',
-    body: JSON.stringify({ message })
+    body: JSON.stringify(body)
   })
 }
 

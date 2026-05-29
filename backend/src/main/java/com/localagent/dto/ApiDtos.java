@@ -11,7 +11,13 @@ public final class ApiDtos {
 
     public record SessionRequest(String nickname) {}
     public record SessionResponse(String sessionId, String token, Instant expiresAt) {}
-    public record PlanRequest(String message) {}
+    public record PlanRequest(
+            String message,
+            Integer planCount,
+            String stopCountPreference,
+            Map<String, Object> clarificationAnswers,
+            UUID previousPlanId
+    ) {}
     public record ConfirmRequest(int rank) {}
     public record FeedbackRequest(String message) {}
 
@@ -21,6 +27,9 @@ public final class ApiDtos {
             Map<String, Object> intent,
             List<Map<String, Object>> options,
             List<Map<String, Object>> trace,
-            Map<String, Object> execution
+            Map<String, Object> execution,
+            Map<String, Object> clarification,
+            Map<String, Object> weather,
+            List<String> warnings
     ) {}
 }
