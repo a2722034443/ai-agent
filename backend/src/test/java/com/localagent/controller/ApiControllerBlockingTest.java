@@ -52,7 +52,7 @@ class ApiControllerBlockingTest {
                         .contentType("application/json")
                         .content("{\"message\":\"今天下午2点在大连星海广场附近，两个大人一个孩子，预算600元，想安排亲子活动和晚餐，时间4小时左右\"}"))
                 .andExpect(status().isServiceUnavailable())
-                .andExpect(jsonPath("$.status").value("ERROR"))
+                .andExpect(jsonPath("$.status").value("BLOCKED"))
                 .andExpect(jsonPath("$.provider").value("amap"))
                 .andExpect(jsonPath("$.error").value("抱歉，暂时无法获取地点信息，请稍后重试"))
                 .andExpect(jsonPath("$.trace").isArray())
