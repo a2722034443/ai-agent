@@ -12,17 +12,19 @@ import org.springframework.stereotype.Component;
 @Component
 public class PlanGeneratorAgent {
     private static final String SYSTEM_PROMPT = """
-            你是本地生活方案生成 Agent。你只能使用用户提供的真实候选地点生成方案，不能编造地点。
-            固定界面文案用中文；真实 POI 名称、品牌名、地址必须保持来源原文，允许包含英文、数字和符号。
-            输出必须是 JSON 数组，不要输出解释。
-            每个方案字段：
-            name、tagline、timeline、totalMinutes、budgetEstimate、fitReasons、riskNotes、executionList。
-            timeline 每项字段：time、type、name、subtype、address、durationMinutes、avgPrice、rating、reason、lng、lat。
-            type 只能使用：活动、餐饮、补充。
-            输入中的 routeCandidates 已经由高德路线计算完成。你必须从 routeCandidates 中挑选并改写成方案，
-            不能替换、增加或编造任何地点，timeline 中的 name 必须和候选完全一致。
-            方案数量、地点数量和总时长必须遵循输入 intent 中的用户约束；没有明确约束时不要自行写死 4-6 小时。
-            每套至少覆盖餐饮和娱乐/文化，并至少包含 3 个 POI。
+            你是本地生活方案表达 Agent。你不是 POI 搜索工具，也不是事实来源。
+
+            只允许使用输入中的 routeCandidates 和 webEvidence 改写方案文案：
+            - 不得新增、替换、编造任何 POI。
+            - timeline 中的 name、address、lng、lat 必须来自候选地点，保持原文。
+            - 可以优化 name、tagline、fitReasons、riskNotes、executionList，让方案像专业管家写出来。
+            - 必须说明真实约束：路线、预算、儿童/老人/忌口/天气/排队/停车/营业状态不确定性。
+            - 如果候选不足，不能硬凑。
+
+            只输出 JSON 数组。
+            每个方案字段：name、tagline、timeline、totalMinutes、budgetEstimate、fitReasons、riskNotes、executionList。
+            timeline 字段：time、type、name、subtype、address、durationMinutes、avgPrice、rating、reason、lng、lat。
+            type 只能是：活动、餐饮、补充。
             """;
 
     private final MimoClient mimoClient;
@@ -79,9 +81,9 @@ public class PlanGeneratorAgent {
         for (int i = 0; i < options.size() && normalized.size() < requestedCount; i++) {
             Map<String, Object> option = new LinkedHashMap<>(options.get(i));
             option.put("rank", normalized.size() + 1);
-            option.putIfAbsent("fitReasons", List.of("符合用户约束", "路线安排完整"));
-            option.putIfAbsent("riskNotes", List.of("建议出发前再次确认营业时间"));
-            option.putIfAbsent("executionList", List.of("购票", "订座", "分享行程"));
+            option.putIfAbsent("fitReasons", List.of("符合用户约束", "路线安排完整", "地点来自真实候选"));
+            option.putIfAbsent("riskNotes", List.of("建议出发前再次确认营业时间、座位和票务状态"));
+            option.putIfAbsent("executionList", List.of("订座", "购票", "分享行程"));
             normalized.add(option);
         }
         if (normalized.size() < requestedCount) {
@@ -99,8 +101,8 @@ public class PlanGeneratorAgent {
     }
 
     private String extractJsonArray(String content) {
-        int start = content.indexOf('[');
-        int end = content.lastIndexOf(']');
+        int start = content == null ? -1 : content.indexOf('[');
+        int end = content == null ? -1 : content.lastIndexOf(']');
         if (start < 0 || end <= start) {
             throw new IllegalArgumentException("MiMo 输出不是 JSON 数组");
         }

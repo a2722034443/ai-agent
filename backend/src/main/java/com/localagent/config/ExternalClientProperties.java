@@ -26,8 +26,8 @@ public class ExternalClientProperties {
         private String webServiceKey = "";
         private String jsApiKey = "";
         private String jsSecurityCode = "";
-        private String city = "\u5927\u8fde";
-        private String defaultOrigin = "121.588000,38.883000";
+        private String city = "";
+        private String defaultOrigin = "";
         private int timeoutMs = 3000;
 
         public boolean isEnabled() { return enabled; }

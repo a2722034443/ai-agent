@@ -50,6 +50,14 @@ class ApiControllerTest {
     }
 
     @Test
+    void createsSessionWithEmptyBody() throws Exception {
+        mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.token").exists());
+    }
+
+    @Test
     void asksForClarificationBeforeCallingRealPlanningWhenRequiredFieldsAreMissing() throws Exception {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.hasKey(anyString())).thenReturn(true);
@@ -69,7 +77,15 @@ class ApiControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
                 .andExpect(jsonPath("$.options").isEmpty())
-                .andExpect(jsonPath("$.clarification.fields").isArray());
+                .andExpect(jsonPath("$.clarification.fields").isArray())
+                .andExpect(jsonPath("$.clarification.fields[0].type").value("text"))
+                .andExpect(jsonPath("$.clarification.fields[0].allowCustom").value(true))
+                .andExpect(jsonPath("$.clarification.fields[0].options").isArray())
+                .andExpect(jsonPath("$.warnings[0]").value("信息补齐前不会查询真实地点，也不会生成方案。"))
+                .andExpect(jsonPath("$.trace[?(@.tool=='AmapPoiSearchTool')]").doesNotExist())
+                .andExpect(jsonPath("$.trace[?(@.tool=='AmapWeatherTool')]").doesNotExist())
+                .andExpect(jsonPath("$.trace[?(@.tool=='WebSearchTool')]").doesNotExist())
+                .andExpect(jsonPath("$.trace[?(@.tool=='AmapRouteEstimateTool')]").doesNotExist());
     }
 
     @Test
@@ -158,6 +174,10 @@ class ApiControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("READY"))
                 .andExpect(jsonPath("$.intent.time_window.start").value("11:00"))
+                .andExpect(jsonPath("$.intent.userFacts.answers.timeWindow").value("11.00"))
+                .andExpect(jsonPath("$.intent.userFacts.answers.budget").value("300"))
+                .andExpect(jsonPath("$.intent.derived.location").exists())
+                .andExpect(jsonPath("$.intent.poiSearchStrategy.activityKeywords").isArray())
                 .andExpect(jsonPath("$.clarification.fields[?(@.key=='timeWindow')]").doesNotExist());
     }
 
@@ -305,6 +325,7 @@ class ApiControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("READY"))
                 .andExpect(jsonPath("$.options").isArray())
+                .andExpect(jsonPath("$.intent.userFacts.answers.location").value("当前位置 121.588000,38.883000"))
                 .andExpect(jsonPath("$.intent.location.lng").value(121.588))
                 .andExpect(jsonPath("$.intent.location.lat").value(38.883));
     }
@@ -337,6 +358,21 @@ class ApiControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
                 .andExpect(jsonPath("$.clarification.fields").isArray());
+
+        mockMvc.perform(post("/api/plans/{id}/confirm", planId)
+                        .contentType("application/json")
+                        .content("{\"rank\":1}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value("NOT_READY"))
+                .andExpect(jsonPath("$.error").exists());
+    }
+
+    @Test
+    void missingPlanReturnsNotFoundInsteadOfServerError() throws Exception {
+        mockMvc.perform(get("/api/plans/{id}", UUID.randomUUID().toString()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value("NOT_FOUND"))
+                .andExpect(jsonPath("$.error").exists());
     }
 
     @Test
@@ -378,6 +414,13 @@ class ApiControllerTest {
                 .andExpect(jsonPath("$.status").value("COMPLETED"))
                 .andExpect(jsonPath("$.execution.orders").isArray())
                 .andExpect(jsonPath("$.execution.shareMessage").exists());
+
+        mockMvc.perform(post("/api/plans/{id}/confirm", planId)
+                        .contentType("application/json")
+                        .content("{\"rank\":99}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.error").exists());
 
         String feedbackMessage = "\u4e0d\u8981\u592a\u8fdc\uff0c\u665a\u996d\u6362\u6e05\u6de1\u4e00\u70b9";
         mockMvc.perform(post("/api/plans/{id}/feedback", planId)

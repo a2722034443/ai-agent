@@ -6,30 +6,23 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
 @Service
 public class SessionService {
-    private static final Logger log = LoggerFactory.getLogger(SessionService.class);
-
     private final StringRedisTemplate redisTemplate;
     private final long ttlHours;
     private final boolean mockSessionStore;
-    private final boolean localFallback;
     private final Map<String, Instant> localSessions = new ConcurrentHashMap<>();
 
     public SessionService(StringRedisTemplate redisTemplate,
                           @Value("${app.session-ttl-hours:24}") long ttlHours,
-                          @Value("${app.mock-session-store:false}") boolean mockSessionStore,
-                          @Value("${app.session-local-fallback:true}") boolean localFallback) {
+                          @Value("${app.mock-session-store:false}") boolean mockSessionStore) {
         this.redisTemplate = redisTemplate;
         this.ttlHours = ttlHours;
         this.mockSessionStore = mockSessionStore;
-        this.localFallback = localFallback;
     }
 
     public SessionResponse create(String nickname) {
@@ -37,42 +30,27 @@ public class SessionService {
         String token = "sess_" + UUID.randomUUID();
         String value = (nickname == null || nickname.isBlank()) ? "guest" : nickname.trim();
         Instant expiresAt = Instant.now().plus(Duration.ofHours(ttlHours));
+
         if (mockSessionStore) {
             localSessions.put(token, expiresAt);
         } else {
-            try {
-                redisTemplate.opsForValue().set(token, value, Duration.ofHours(ttlHours));
-            } catch (RuntimeException e) {
-                if (!localFallback) {
-                    throw e;
-                }
-                localSessions.put(token, expiresAt);
-                log.warn("Redis 不可用，session 临时保存到本进程内存；重启后该 token 会失效。", e);
-            }
+            redisTemplate.opsForValue().set(token, value, Duration.ofHours(ttlHours));
         }
         return new SessionResponse(sessionId, token, expiresAt);
     }
 
     public void validate(String token) {
         if (token == null || token.isBlank()) {
-            throw new IllegalArgumentException("Invalid or expired session token");
+            throw new SessionAuthException("会话已过期或不存在，请重新创建会话");
         }
         if (mockSessionStore) {
             validateLocal(token);
             return;
         }
-        try {
-            if (Boolean.TRUE.equals(redisTemplate.hasKey(token))) {
-                return;
-            }
-        } catch (RuntimeException e) {
-            if (!localFallback) {
-                throw e;
-            }
-            validateLocal(token);
+        if (Boolean.TRUE.equals(redisTemplate.hasKey(token))) {
             return;
         }
-        throw new IllegalArgumentException("Invalid or expired session token");
+        throw new SessionAuthException("会话已过期或不存在，请重新创建会话");
     }
 
     private void validateLocal(String token) {
@@ -80,6 +58,6 @@ public class SessionService {
         if (expiresAt != null && expiresAt.isAfter(Instant.now())) {
             return;
         }
-        throw new IllegalArgumentException("Invalid or expired session token");
+        throw new SessionAuthException("会话已过期或不存在，请重新创建会话");
     }
 }

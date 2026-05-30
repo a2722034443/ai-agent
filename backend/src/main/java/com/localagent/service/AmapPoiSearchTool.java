@@ -53,17 +53,28 @@ public class AmapPoiSearchTool {
         try {
             Anchor anchor = resolveAnchor(planId, intent);
             List<Poi> pois = new ArrayList<>();
-            pois.addAll(searchByKeyword(planId, intent, PoiType.ENTERTAINMENT, activityKeyword(intent), anchor));
+            for (String keyword : keywords(intent, "activityKeywords", activityKeyword(intent))) {
+                pois.addAll(searchByKeyword(planId, intent, PoiType.ENTERTAINMENT, keyword, anchor));
+            }
             if (pois.stream().noneMatch(poi -> poi.getType() == PoiType.ENTERTAINMENT)) {
                 pois.addAll(searchByKeyword(planId, intent, PoiType.ENTERTAINMENT, fallbackActivityKeyword(intent), anchor));
             }
-            pois.addAll(searchByKeyword(planId, intent, PoiType.CULTURE, "展览|文化|剧场|博物馆", anchor));
-            pois.addAll(searchByKeyword(planId, intent, PoiType.DINING, diningKeyword(intent), anchor));
-            pois.addAll(searchByKeyword(planId, intent, PoiType.EXTRA, "公园|书店|咖啡", anchor));
-            if (pois.size() < 6) {
+            for (String keyword : keywords(intent, "activityKeywords", "展览|文化|剧场|博物馆")) {
+                pois.addAll(searchByKeyword(planId, intent, PoiType.CULTURE, keyword, anchor));
+            }
+            for (String keyword : keywords(intent, "diningKeywords", diningKeyword(intent))) {
+                pois.addAll(searchByKeyword(planId, intent, PoiType.DINING, keyword, anchor));
+            }
+            for (String keyword : keywords(intent, "extraKeywords", "公园|书店|咖啡")) {
+                pois.addAll(searchByKeyword(planId, intent, PoiType.EXTRA, keyword, anchor));
+            }
+            List<Poi> deduped = dedupePois(pois);
+            if (deduped.size() < 6) {
                 return blockOrMock(planId, intent, "empty_or_too_few_results", SEARCH_PATH);
             }
-            return pois;
+            return deduped;
+        } catch (PlanBlockedException e) {
+            throw e;
         } catch (Exception e) {
             return blockOrMock(planId, intent, e.getClass().getSimpleName() + ": " + e.getMessage(), SEARCH_PATH);
         }
@@ -78,10 +89,11 @@ public class AmapPoiSearchTool {
         long start = System.currentTimeMillis();
         ExternalClientProperties.Amap amap = properties.getAmap();
         String sourceUrl = amap.getBaseUrl() + (anchor == null ? SEARCH_PATH : AROUND_PATH);
+        String city = city(intent);
         URI uri = anchor == null
                 ? URI.create(sourceUrl + "?key=" + encode(amap.getWebServiceKey())
                 + "&keywords=" + encode(keyword)
-                + "&city=" + encode(city(intent, amap.getCity()))
+                + cityQuery(city)
                 + "&offset=8&page=1&extensions=base")
                 : URI.create(sourceUrl + "?key=" + encode(amap.getWebServiceKey())
                 + "&keywords=" + encode(keyword)
@@ -119,8 +131,9 @@ public class AmapPoiSearchTool {
         output.put("count", mapped.size());
         output.put("info", body.getOrDefault("info", ""));
         output.put("apiStatus", body.getOrDefault("status", ""));
+        output.put("searchStrategy", intent.getOrDefault("poiSearchStrategy", Map.of()));
         traceService.trace(planId, "AmapPoiSearchTool", mapped.isEmpty() ? "empty" : "ok", start,
-                Map.of("keyword", keyword, "city", city(intent, amap.getCity()), "type", type.name()), output);
+                Map.of("keyword", keyword, "city", city, "type", type.name()), output);
         return mapped;
     }
 
@@ -133,7 +146,7 @@ public class AmapPoiSearchTool {
                     lngNumber.doubleValue(), latNumber.doubleValue());
         }
         String district = String.valueOf(location.getOrDefault("district", ""));
-        String city = String.valueOf(location.getOrDefault("city", properties.getAmap().getCity()));
+        String city = city(intent);
         if (isBlank(district) || "null".equals(district)) {
             return null;
         }
@@ -142,7 +155,7 @@ public class AmapPoiSearchTool {
         String sourceUrl = amap.getBaseUrl() + GEOCODE_PATH;
         URI uri = URI.create(sourceUrl + "?key=" + encode(amap.getWebServiceKey())
                 + "&address=" + encode(district)
-                + "&city=" + encode(isBlank(city) || "null".equals(city) ? amap.getCity() : city));
+                + cityQuery(city));
         requestLimiter.awaitSlot();
         HttpClient client = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(amap.getTimeoutMs()))
@@ -165,7 +178,8 @@ public class AmapPoiSearchTool {
         traceService.trace(planId, "AmapGeocodeTool", point[0] == 0.0 ? "empty" : "ok", start,
                 Map.of("address", district), output);
         if (point[0] == 0.0 || point[1] == 0.0) {
-            return null;
+            throw new PlanBlockedException(planId, "amap",
+                    "抱歉，暂时无法定位你填写的地点，请换成更具体的城市、商圈、地标或地址。", 422);
         }
         location.put("lng", point[0]);
         location.put("lat", point[1]);
@@ -178,18 +192,50 @@ public class AmapPoiSearchTool {
         Map<String, Object> output = new LinkedHashMap<>(traceService.externalMeta(
                 "amap", allowMockPoi ? "mock" : "blocked", sourceUrl == null ? "not-called" : sourceUrl, reason));
         output.put("reason", reason);
-        output.put("message", BlockMessages.AMAP_FAILED);
+        output.put("message", "empty_or_too_few_results".equals(reason) ? BlockMessages.NO_POI_FOUND : BlockMessages.AMAP_FAILED);
+        output.put("searchStrategy", intent.getOrDefault("poiSearchStrategy", Map.of()));
         traceService.trace(planId, "AmapPoiSearchTool", allowMockPoi ? "mock" : "blocked", start, intent, output);
         if (allowMockPoi) {
             return mockTools.searchPois(planId, intent);
         }
         String message = "empty_or_too_few_results".equals(reason) ? BlockMessages.NO_POI_FOUND : BlockMessages.AMAP_FAILED;
-        throw new PlanBlockedException(planId, "amap", message, 503);
+        int status = "empty_or_too_few_results".equals(reason) ? 422 : 503;
+        throw new PlanBlockedException(planId, "amap", message, status);
+    }
+
+    private List<String> keywords(Map<String, Object> intent, String key, String fallback) {
+        Map<String, Object> strategy = castMap(intent.get("poiSearchStrategy"));
+        List<String> values = new ArrayList<>();
+        Object raw = strategy.get(key);
+        if (raw instanceof List<?> list) {
+            for (Object item : list) {
+                String text = String.valueOf(item).trim();
+                if (!text.isBlank() && !values.contains(text)) {
+                    values.add(text);
+                }
+            }
+        }
+        if (values.isEmpty()) {
+            values.add(fallback);
+        }
+        return values.stream().limit(4).toList();
+    }
+
+    private List<Poi> dedupePois(List<Poi> pois) {
+        Map<String, Poi> deduped = new LinkedHashMap<>();
+        for (Poi poi : pois) {
+            String key = poi.getName() + "|" + poi.getAddress();
+            deduped.putIfAbsent(key, poi);
+        }
+        return new ArrayList<>(deduped.values());
     }
 
     private String activityKeyword(Map<String, Object> intent) {
         if ("friends".equals(intent.get("scenario"))) {
             return "KTV|密室|桌游";
+        }
+        if ("couple".equals(intent.get("scenario"))) {
+            return "展览|咖啡|夜景|艺术馆";
         }
         return "亲子|乐园|博物馆";
     }
@@ -198,16 +244,22 @@ public class AmapPoiSearchTool {
         if ("friends".equals(intent.get("scenario"))) {
             return "娱乐|KTV";
         }
+        if ("couple".equals(intent.get("scenario"))) {
+            return "艺术馆|展览";
+        }
         return "儿童乐园|科技馆";
     }
 
     private String diningKeyword(Map<String, Object> intent) {
         String constraints = String.valueOf(intent.getOrDefault("hard_constraints", List.of()));
-        if (constraints.contains("低卡优先") || constraints.contains("低卡") || constraints.contains("减肥")) {
+        if (constraints.contains("饮食限制") || constraints.contains("低卡优先") || constraints.contains("低卡") || constraints.contains("减肥")) {
             return "轻食|健康餐|沙拉";
         }
         if ("friends".equals(intent.get("scenario"))) {
             return "聚餐|烧烤|餐厅";
+        }
+        if ("couple".equals(intent.get("scenario"))) {
+            return "约会餐厅|西餐|日料";
         }
         return "亲子|餐厅";
     }
@@ -239,10 +291,14 @@ public class AmapPoiSearchTool {
         return value != null && !value.isBlank();
     }
 
-    private String city(Map<String, Object> intent, String fallback) {
+    private String city(Map<String, Object> intent) {
         Object city = castMap(intent.get("location")).get("city");
         String text = city == null ? "" : String.valueOf(city);
-        return text.isBlank() || "null".equals(text) ? fallback : text;
+        return text.isBlank() || "null".equals(text) ? "" : text;
+    }
+
+    private String cityQuery(String city) {
+        return isBlank(city) ? "" : "&city=" + encode(city);
     }
 
     private double[] parseLocation(String location) {

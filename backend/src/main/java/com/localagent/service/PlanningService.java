@@ -31,8 +31,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class PlanningService {
-    private static final double DEFAULT_LNG = 121.588000;
-    private static final double DEFAULT_LAT = 38.883000;
     private static final double MAX_POI_DISTANCE_KM = 12.0;
     private static final double MAX_ROUTE_DISTANCE_KM = 8.0;
     private static final double MAX_DIRECT_ROUTE_PREFILTER_KM = 10.5;
@@ -92,9 +90,12 @@ public class PlanningService {
     public PlanResponse createPlan(String token, PlanRequest request) {
         String message = request == null ? "" : request.message();
         PlanSession session = planSessionRepository.save(PlanSession.create(token, message));
-        Map<String, Object> intent = intentParserAgent.fastParse(session.getId(), message);
+        Map<String, Object> intent = intentParserAgent.parse(session.getId(), message);
+        intent.put("rawMessage", message);
+        clarificationService.ensureUserFacts(intent, message);
         intent = clarificationService.mergeAnswers(intent, request == null ? null : request.clarificationAnswers());
         applyRequestPreferences(intent, request);
+        ensurePoiSearchStrategy(intent);
         Map<String, Object> clarification = clarificationService.buildClarification(session.getId(), intent, message);
         if (!clarification.isEmpty()) {
             Map<String, Object> result = new LinkedHashMap<>();
@@ -120,7 +121,7 @@ public class PlanningService {
             result.put("promptModules", promptCatalog.loadPrompts().keySet());
             result.put("agentPipeline", promptCatalog.loadPipeline());
             result.put("webEvidenceCount", webEvidence.size());
-            result.put("generationMode", "fast_rule_first");
+            result.put("generationMode", "llm_strategy_deterministic_tools");
             session.markReady(toJson(intent), toJson(result));
             planSessionRepository.save(session);
             for (Map<String, Object> option : options) {
@@ -198,6 +199,57 @@ public class PlanningService {
         if (request.stopCountPreference() != null && !request.stopCountPreference().isBlank()) {
             intent.put("stopCountPreference", request.stopCountPreference());
         }
+    }
+
+    private void ensurePoiSearchStrategy(Map<String, Object> intent) {
+        Map<String, Object> strategy = new LinkedHashMap<>(castMap(intent.get("poiSearchStrategy")));
+        if (strategy.isEmpty()) {
+            strategy.put("activityKeywords", defaultActivityKeywords(intent));
+            strategy.put("diningKeywords", defaultDiningKeywords(intent));
+            strategy.put("extraKeywords", List.of("咖啡", "书店", "公园"));
+            strategy.put("rankingWeights", Map.of("distance", 0.35, "rating", 0.25, "budgetFit", 0.15, "scenarioFit", 0.25));
+            strategy.put("butlerNotes", List.of("优先真实地点、短路线、预算匹配和同行人安全舒适度。"));
+        } else {
+            strategy.putIfAbsent("activityKeywords", defaultActivityKeywords(intent));
+            strategy.putIfAbsent("diningKeywords", defaultDiningKeywords(intent));
+            strategy.putIfAbsent("extraKeywords", List.of("咖啡", "书店", "公园"));
+            strategy.putIfAbsent("rankingWeights", Map.of("distance", 0.35, "rating", 0.25, "budgetFit", 0.15, "scenarioFit", 0.25));
+            strategy.putIfAbsent("butlerNotes", List.of());
+        }
+        intent.put("poiSearchStrategy", strategy);
+    }
+
+    private List<String> defaultActivityKeywords(Map<String, Object> intent) {
+        String scenario = String.valueOf(intent.getOrDefault("scenario", "unknown"));
+        List<String> hard = castStringList(intent.get("hard_constraints"));
+        if ("family".equals(scenario) || hard.contains("儿童友好")) {
+            return List.of("亲子", "儿童乐园", "博物馆", "科技馆");
+        }
+        if ("friends".equals(scenario)) {
+            return List.of("桌游", "密室", "KTV", "展览");
+        }
+        if ("couple".equals(scenario)) {
+            return List.of("展览", "咖啡", "夜景", "艺术馆");
+        }
+        return List.of("展览", "文化", "公园", "娱乐");
+    }
+
+    private List<String> defaultDiningKeywords(Map<String, Object> intent) {
+        List<String> hard = castStringList(intent.get("hard_constraints"));
+        if (hard.contains("饮食限制") || hard.contains("低卡优先")) {
+            return List.of("轻食", "健康餐", "清淡餐厅", "沙拉");
+        }
+        String scenario = String.valueOf(intent.getOrDefault("scenario", "unknown"));
+        if ("family".equals(scenario)) {
+            return List.of("亲子餐厅", "儿童友好餐厅", "家庭餐厅");
+        }
+        if ("friends".equals(scenario)) {
+            return List.of("聚餐", "烧烤", "火锅", "餐厅");
+        }
+        if ("couple".equals(scenario)) {
+            return List.of("约会餐厅", "西餐", "日料", "清淡餐厅");
+        }
+        return List.of("餐厅", "简餐", "清淡餐厅");
     }
 
     private Map<String, Object> feedbackPatch(UUID planId, String message, Map<String, Object> previousIntent,
@@ -340,6 +392,11 @@ public class PlanningService {
 
     private List<Poi> nearbyCandidates(List<Poi> candidates, Map<String, Object> intent) {
         double[] anchor = anchor(intent);
+        if (anchor == null) {
+            return candidates.stream()
+                    .filter(poi -> poi.getLng() != 0.0 && poi.getLat() != 0.0)
+                    .toList();
+        }
         return candidates.stream()
                 .filter(poi -> poi.getLng() != 0.0 && poi.getLat() != 0.0)
                 .filter(poi -> distanceKm(anchor[1], anchor[0], poi.getLat(), poi.getLng()) <= MAX_POI_DISTANCE_KM)
@@ -686,7 +743,7 @@ public class PlanningService {
                 return new double[] {lngNumber.doubleValue(), latNumber.doubleValue()};
             }
         }
-        return new double[] {DEFAULT_LNG, DEFAULT_LAT};
+        return null;
     }
 
     private PlanResponse toResponse(UUID id) {
@@ -721,7 +778,7 @@ public class PlanningService {
                 .filter(option -> option.getRankNo() == rank)
                 .findFirst()
                 .map(option -> fromJson(option.getOptionJson()))
-                .orElseThrow();
+                .orElseThrow(() -> new IllegalArgumentException("没有找到这个方案，请选择已生成的方案编号。"));
     }
 
     private Map<String, Object> findOptionOrEmpty(UUID id, int rank) {

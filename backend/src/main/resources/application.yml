@@ -1,5 +1,5 @@
 server:
-  port: 8080
+  port: ${SERVER_PORT:8080}
 
 spring:
   application:
@@ -22,6 +22,7 @@ spring:
 
 app:
   session-ttl-hours: 24
+  mock-session-store: false
   frontend-origin: ${FRONTEND_ORIGIN:http://localhost:5173,http://127.0.0.1:5173}
   allow-mock-poi: ${ALLOW_MOCK_POI:false}
 
@@ -32,8 +33,8 @@ external:
     web-service-key: ${AMAP_WEB_SERVICE_KEY:}
     js-api-key: ${AMAP_JS_API_KEY:}
     js-security-code: ${AMAP_JS_SECURITY_CODE:}
-    city: ${AMAP_CITY:大连}
-    default-origin: ${AMAP_DEFAULT_ORIGIN:121.588000,38.883000}
+    city: ${AMAP_CITY:}
+    default-origin: ${AMAP_DEFAULT_ORIGIN:}
     timeout-ms: ${AMAP_TIMEOUT_MS:3000}
   search:
     enabled: ${SEARCH_ENABLED:true}

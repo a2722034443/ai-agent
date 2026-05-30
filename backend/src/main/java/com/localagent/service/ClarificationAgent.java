@@ -11,27 +11,32 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class ClarificationAgent {
+    private static final List<String> ALLOWED_KEYS = List.of(
+            "location", "timeWindow", "duration", "group", "budget", "preferences"
+    );
+
     private static final String SYSTEM_PROMPT = """
-            你是本地生活规划产品的澄清 Agent。
-            你的任务不是生成方案，而是判断用户输入和已解析 intent 还缺哪些“生成真实本地生活方案的必要条件”，并生成交互式澄清卡片。
+            你是全国本地生活规划产品的需求澄清 Agent。
 
-            必要条件：
-            1. location：必须有可被地图检索的城市 + 商圈/地标/地址。用户说“我附近”“附近”“当前位置附近”不算完整。
-            2. timeWindow：必须有明确开始时间。只有“上午/下午/晚上”不算完整；“早上12点/上午12点”属于冲突表达，需要重问。
-            3. duration：必须有游玩时长或结束时间。
-            4. group：必须知道同行人数和构成。
-            5. budget：必须知道总预算或预算区间。
-            6. preferences：必须知道核心需求类型，例如约会、亲子、朋友聚会、展览、晚餐、户外等。
+            你的任务不是生成行程，而是在调用地图、搜索、路线、天气等真实工具之前，判断用户输入和已收集事实还缺少哪些必要条件，并生成适合前端展示的澄清卡片。
 
-            生成规则：
+            业务底线：
+            1. 只要缺少可定位地点、明确开始时间、游玩时长/结束时间、同行人构成、预算、核心需求，就必须继续澄清。
+            2. “附近”“我附近”“本地”“我所在城市”“地铁站附近”没有坐标或具体城市地标时，不算可定位地点。
+            3. “上午/下午/晚上/周末/下班后/今天下午”不算明确开始时间，必须让用户补成 10:00、14:30、晚上7点这类表达。
+            4. 用户补充答案可以是自然语言字符串。不要要求用户按机器格式填写。
+            5. 不要编造城市、商圈、POI、营业状态、价格或天气。
+            6. 对儿童、老人、行动不便、过敏、忌口、停车、地铁、宠物、排队容忍度、室内外、母婴室/厕所等信息要有管家意识：若它们影响安全或体验，就在问题或选项里提醒用户补充。
+
+            输出要求：
             - 只输出 JSON 对象，不输出解释。
-            - 选项必须根据用户原句动态生成，全国通用，不得默认任何城市；只有用户明确提到城市时才可在选项中使用该城市。
-            - 每个字段必须包含 allowCustom=true，表示前端要展示自定义输入。
-            - 对 location，如果不知道用户城市，不要给“我所在城市 + ...”这种可点击选项；suggestions 可以为空数组，并用 question 提醒用户手动输入“城市 + 商圈/地标/地址”。
-            - 不要编造用户所在城市，不要默认“大连”。
-            - 字段数量尽量少，只问真正缺失或无效的信息。
+            - 只问真正缺失或无效的字段，字段 key 只能是 location、timeWindow、duration、group、budget、preferences。
+            - 每个字段 type 固定为 "text"。
+            - 每个字段必须有 0 到 3 个 suggestions；有 suggestions 时同时给 options，options 形如 [{"code":"A","text":"..."}]。
+            - 每个字段必须 allowCustom=true，必须有 reason 和 expectedAnswerHint。
+            - location 如果不知道用户城市，suggestions 必须为空，不要给“我所在城市 + ...”这种模板选项。
 
-            JSON 格式：
+            JSON 结构：
             {
               "message": "一句中文提示",
               "missingFields": ["location"],
@@ -40,10 +45,12 @@ public class ClarificationAgent {
                   "key": "location",
                   "label": "地点",
                   "question": "中文问题",
-                  "type": "text|choice|number",
+                  "type": "text",
                   "suggestions": ["选项A", "选项B", "选项C"],
+                  "options": [{"code":"A","text":"选项A"}],
                   "allowCustom": true,
-                  "reason": "为什么缺这个字段"
+                  "reason": "为什么缺这个字段",
+                  "expectedAnswerHint": "用户可以怎么填"
                 }
               ]
             }
@@ -69,10 +76,10 @@ public class ClarificationAgent {
             String userPrompt = objectMapper.writeValueAsString(Map.of(
                     "userMessage", message == null ? "" : message,
                     "currentIntent", intent == null ? Map.of() : intent,
-                    "ruleDetectedMissingFields", fallback.getOrDefault("fields", List.of())
+                    "ruleDetectedClarification", fallback
             ));
             String content = mimoClient.complete(SYSTEM_PROMPT, userPrompt);
-            Map<String, Object> llmResult = normalize(objectMapper.readValue(extractJsonObject(content), new TypeReference<>() {}));
+            Map<String, Object> llmResult = normalize(objectMapper.readValue(extractJsonObject(content), new TypeReference<>() {}), fallback);
             if (castList(llmResult.get("fields")).isEmpty()) {
                 return Map.of();
             }
@@ -82,61 +89,112 @@ public class ClarificationAgent {
                             "fields", castList(llmResult.get("fields")).stream().map(field -> field.get("key")).toList()));
             return llmResult;
         } catch (Exception e) {
+            Map<String, Object> normalizedFallback = normalize(fallback, fallback);
             traceService.trace(planId, "ClarificationAgent", "fallback", start,
                     Map.of("message", safeSnippet(message)),
                     Map.of("provider", "mimo", "mode", "fallback", "reason", safeReason(e),
-                            "fieldCount", castList(fallback.get("fields")).size()));
-            return fallback;
+                            "fieldCount", castList(normalizedFallback.get("fields")).size()));
+            return normalizedFallback;
         }
     }
 
-    private Map<String, Object> normalize(Map<String, Object> raw) {
+    private Map<String, Object> normalize(Map<String, Object> raw, Map<String, Object> fallback) {
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("message", string(raw.getOrDefault("message", "还需要补充几项信息，补齐后我再查询真实地点并生成方案。")));
+        result.put("message", string(raw.getOrDefault("message",
+                fallback == null ? "还需要补充几项信息，补齐后我再查询真实地点并生成方案。" : fallback.get("message"))));
+
+        List<Map<String, Object>> fallbackFields = castList(fallback == null ? null : fallback.get("fields"));
+        Map<String, Map<String, Object>> fallbackByKey = new LinkedHashMap<>();
+        fallbackFields.forEach(field -> fallbackByKey.put(string(field.get("key")), field));
+
         List<Map<String, Object>> fields = new ArrayList<>();
         for (Map<String, Object> field : castList(raw.get("fields"))) {
             String key = string(field.get("key"));
-            if (!List.of("location", "timeWindow", "duration", "group", "budget", "preferences").contains(key)) {
-                continue;
-            }
+            if (!ALLOWED_KEYS.contains(key)) continue;
+            Map<String, Object> fallbackField = fallbackByKey.getOrDefault(key, Map.of());
             Map<String, Object> normalized = new LinkedHashMap<>();
             normalized.put("key", key);
-            normalized.put("label", string(field.getOrDefault("label", defaultLabel(key))));
-            normalized.put("question", string(field.getOrDefault("question", defaultQuestion(key))));
-            normalized.put("type", string(field.getOrDefault("type", defaultType(key))));
-            normalized.put("suggestions", normalizeSuggestions(field.get("suggestions"), key));
+            normalized.put("label", firstText(field.get("label"), fallbackField.get("label"), defaultLabel(key)));
+            normalized.put("question", firstText(field.get("question"), fallbackField.get("question"), defaultQuestion(key)));
+            normalized.put("type", "text");
+            List<String> suggestions = normalizeSuggestions(field.get("suggestions"), fallbackField.get("suggestions"), key);
+            normalized.put("suggestions", suggestions);
+            normalized.put("options", normalizeOptions(field.get("options"), suggestions));
             normalized.put("allowCustom", true);
-            normalized.put("reason", string(field.getOrDefault("reason", "")));
+            normalized.put("reason", firstText(field.get("reason"), fallbackField.get("reason"), defaultReason(key)));
+            normalized.put("expectedAnswerHint", firstText(field.get("expectedAnswerHint"), fallbackField.get("expectedAnswerHint"),
+                    defaultHint(key)));
             fields.add(normalized);
+        }
+        if (fields.isEmpty() && !fallbackFields.isEmpty()) {
+            for (Map<String, Object> field : fallbackFields) {
+                String key = string(field.get("key"));
+                if (ALLOWED_KEYS.contains(key)) {
+                    Map<String, Object> normalized = new LinkedHashMap<>(field);
+                    List<String> suggestions = normalizeSuggestions(field.get("suggestions"), null, key);
+                    normalized.put("type", "text");
+                    normalized.put("suggestions", suggestions);
+                    normalized.put("options", normalizeOptions(field.get("options"), suggestions));
+                    normalized.put("allowCustom", true);
+                    normalized.putIfAbsent("reason", defaultReason(key));
+                    normalized.putIfAbsent("expectedAnswerHint", defaultHint(key));
+                    fields.add(normalized);
+                }
+            }
         }
         result.put("fields", fields);
         result.put("missingFields", fields.stream().map(field -> field.get("key")).toList());
         return result;
     }
 
-    private List<String> normalizeSuggestions(Object value, String key) {
+    private List<String> normalizeSuggestions(Object primary, Object fallback, String key) {
         List<String> suggestions = new ArrayList<>();
-        if (value instanceof List<?> list) {
-            for (Object item : list) {
-                String text = string(item);
-                if (!text.isBlank() && !suggestions.contains(text)) {
-                    suggestions.add(text);
-                }
-            }
+        addSuggestions(suggestions, primary);
+        if (suggestions.isEmpty()) {
+            addSuggestions(suggestions, fallback);
         }
         if (suggestions.isEmpty() && !"location".equals(key)) {
             suggestions.addAll(defaultSuggestions(key));
         }
-        return suggestions.stream().limit(3).toList();
+        return suggestions.stream().distinct().limit(3).toList();
+    }
+
+    private void addSuggestions(List<String> suggestions, Object value) {
+        if (value instanceof List<?> list) {
+            for (Object item : list) {
+                String text = string(item);
+                if (!text.isBlank()) suggestions.add(text);
+            }
+        }
+    }
+
+    private List<Map<String, Object>> normalizeOptions(Object value, List<String> suggestions) {
+        List<Map<String, Object>> options = new ArrayList<>();
+        if (value instanceof List<?> list) {
+            for (Object item : list) {
+                if (item instanceof Map<?, ?> raw) {
+                    String text = string(raw.get("text"));
+                    if (!text.isBlank()) {
+                        String code = string(raw.get("code"));
+                        options.add(Map.of("code", code.isBlank() ? String.valueOf((char) ('A' + options.size())) : code, "text", text));
+                    }
+                }
+            }
+        }
+        if (options.isEmpty()) {
+            for (int i = 0; i < suggestions.size(); i++) {
+                options.add(Map.of("code", String.valueOf((char) ('A' + i)), "text", suggestions.get(i)));
+            }
+        }
+        return options;
     }
 
     private List<String> defaultSuggestions(String key) {
         return switch (key) {
-            case "location" -> List.of();
             case "timeWindow" -> List.of("10:00", "14:00", "19:00");
             case "duration" -> List.of("2小时左右", "3小时左右", "4小时左右");
-            case "group" -> List.of("情侣两人", "2-4个朋友", "两个大人一个孩子");
-            case "budget" -> List.of("300", "600", "1000");
+            case "group" -> List.of("我自己", "情侣两人", "两个大人一个孩子");
+            case "budget" -> List.of("300元", "600元", "1000元");
             case "preferences" -> List.of("轻松逛逛和吃饭", "文化展览和咖啡", "室内活动和简餐");
             default -> List.of();
         };
@@ -166,8 +224,28 @@ public class ClarificationAgent {
         };
     }
 
-    private String defaultType(String key) {
-        return "budget".equals(key) ? "number" : "timeWindow".equals(key) ? "choice" : "text";
+    private String defaultReason(String key) {
+        return switch (key) {
+            case "location" -> "地图搜索需要可定位地点。";
+            case "timeWindow" -> "明确开始时间会影响营业、天气和路线。";
+            case "duration" -> "时长决定行程密度。";
+            case "group" -> "同行人影响安全和体验筛选。";
+            case "budget" -> "预算影响餐厅和活动匹配。";
+            case "preferences" -> "核心需求决定搜索策略。";
+            default -> "补齐后才能规划。";
+        };
+    }
+
+    private String defaultHint(String key) {
+        return switch (key) {
+            case "location" -> "城市 + 地标/商圈/地址，或当前位置经纬度。";
+            case "timeWindow" -> "10:00、14:30、晚上7点。";
+            case "duration" -> "3小时左右、晚饭后结束。";
+            case "group" -> "情侣两人、两个大人一个孩子、4个朋友。";
+            case "budget" -> "总预算600元、每人200左右。";
+            case "preferences" -> "亲子、约会、少走路、清淡、室内等。";
+            default -> "自然语言填写即可。";
+        };
     }
 
     private String extractJsonObject(String content) {
@@ -182,6 +260,14 @@ public class ClarificationAgent {
     @SuppressWarnings("unchecked")
     private List<Map<String, Object>> castList(Object value) {
         return value instanceof List<?> ? (List<Map<String, Object>>) value : List.of();
+    }
+
+    private String firstText(Object... values) {
+        for (Object value : values) {
+            String text = string(value);
+            if (!text.isBlank()) return text;
+        }
+        return "";
     }
 
     private String string(Object value) {

@@ -96,6 +96,9 @@ class PlanningServiceTest {
         );
 
         assertThat(response.status()).isEqualTo("READY");
+        assertThat(response.intent()).containsKey("userFacts");
+        assertThat(response.intent()).containsKey("derived");
+        assertThat(response.intent()).containsKey("poiSearchStrategy");
         assertThat(response.options()).isNotEmpty();
         assertThat(response.options().size()).isLessThan(5);
         assertThat(response.warnings().toString()).contains("真实地点和路线约束");

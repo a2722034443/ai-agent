@@ -5,8 +5,8 @@ external:
     web-service-key: ${AMAP_WEB_SERVICE_KEY:replace-with-amap-web-service-key}
     js-api-key: ${AMAP_JS_API_KEY:replace-only-when-frontend-map-is-needed}
     js-security-code: ${AMAP_JS_SECURITY_CODE:replace-only-when-frontend-map-is-needed}
-    city: 大连
-    default-origin: 121.588000,38.883000
+    city:
+    default-origin:
     timeout-ms: 3000
   search:
     enabled: true
@@ -24,3 +24,6 @@ external:
     max-tokens: ${MIMO_MAX_TOKENS:4096}
     temperature: ${MIMO_TEMPERATURE:0.1}
     timeout-ms: ${MIMO_TIMEOUT_MS:30000}
+
+app:
+  mock-session-store: false

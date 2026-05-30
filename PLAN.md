@@ -12,7 +12,7 @@
   - `frontend/`：Vue 3 Web 控制台，展示自然语言输入、Top-3 方案、工具调用链、地图/时间轴、确认执行结果。
   - `prompts/`：项目内标准 prompt 模块，运行时由后端加载和串联。
   - `docs/`：≤2 页设计文档、API 文档、Mock 工具说明、一键启动说明。
-  - `docker-compose.yml`：本地 MySQL + Redis。
+  - 本地 MySQL + Redis 由原生服务提供，项目不使用 Docker 启动。
 - Prompt/Agent 串联：
   - `project-management.prompt.md`：按立项、启动、计划、周报、风险输出项目过程检查。
   - `requirement-analysis.prompt.md`：把一句自然语言解析为人群、时间、地理、预算、偏好、硬约束。
@@ -62,4 +62,4 @@
 - “skill/prompt”落地为项目内 `prompts/`，由 Spring Boot 运行时编排，不创建全局 Codex skill。
 - Demo 运行默认 Mock-only；真实联网搜索仅用于开发前核验资料和文档依据。
 - 优先使用 Spring Boot 3.x/Java 21 的稳定组合；若本机 Java 版本不匹配，实施时再按本机环境调整。
-- 参考来源：Vue 3 官方文档 https://vuejs.org/guide/introduction.html ，Spring Boot 官方文档 https://docs.spring.io/spring-boot/reference/index.html ，Spring Boot Docker Compose https://docs.spring.io/spring-boot/how-to/docker-compose.html ，高德 POI 搜索 https://lbs.amap.com/api/webservice/guide/api/search/ ，OpenAI Function Calling https://platform.openai.com/docs/guides/function-calling ，OpenAI Structured Outputs https://platform.openai.com/docs/guides/structured-outputs ，MySQL Spatial https://dev.mysql.com/doc/refman/8.4/en/spatial-type-overview.html ，Redis Data Types https://redis.io/docs/latest/develop/data-types/ 。
+- 参考来源：Vue 3 官方文档 https://vuejs.org/guide/introduction.html ，Spring Boot 官方文档 https://docs.spring.io/spring-boot/reference/index.html ，高德 POI 搜索 https://lbs.amap.com/api/webservice/guide/api/search/ ，OpenAI Function Calling https://platform.openai.com/docs/guides/function-calling ，OpenAI Structured Outputs https://platform.openai.com/docs/guides/structured-outputs ，MySQL Spatial https://dev.mysql.com/doc/refman/8.4/en/spatial-type-overview.html ，Redis Data Types https://redis.io/docs/latest/develop/data-types/ 。
