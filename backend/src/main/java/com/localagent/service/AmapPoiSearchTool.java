@@ -17,6 +17,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -25,23 +30,31 @@ public class AmapPoiSearchTool {
     private static final String SEARCH_PATH = "/v3/place/text";
     private static final String AROUND_PATH = "/v3/place/around";
     private static final String GEOCODE_PATH = "/v3/geocode/geo";
+    private static final int MAX_KEYWORDS_PER_TYPE = 2;
+    private static final int POI_OFFSET = 15;
+    private static final int AROUND_RADIUS = 8000;
+    private static final int MIN_DEDUPED_SIZE = 9;
 
     private final ExternalClientProperties properties;
     private final MockTools mockTools;
     private final ToolTraceService traceService;
     private final ObjectMapper objectMapper;
     private final AmapRequestLimiter requestLimiter;
+    private final HttpClient httpClient;
     private final boolean allowMockPoi;
+    private final ExecutorService executor = Executors.newCachedThreadPool();
 
     public AmapPoiSearchTool(ExternalClientProperties properties, MockTools mockTools,
                              ToolTraceService traceService, ObjectMapper objectMapper,
                              AmapRequestLimiter requestLimiter,
+                             @Qualifier("amapHttpClient") HttpClient httpClient,
                              @Value("${app.allow-mock-poi:false}") boolean allowMockPoi) {
         this.properties = properties;
         this.mockTools = mockTools;
         this.traceService = traceService;
         this.objectMapper = objectMapper;
         this.requestLimiter = requestLimiter;
+        this.httpClient = httpClient;
         this.allowMockPoi = allowMockPoi;
     }
 
@@ -52,24 +65,47 @@ public class AmapPoiSearchTool {
         }
         try {
             Anchor anchor = resolveAnchor(planId, intent);
-            List<Poi> pois = new ArrayList<>();
+
+            // 并行构建所有搜索任务
+            List<CompletableFuture<List<Poi>>> futures = new ArrayList<>();
+
             for (String keyword : keywords(intent, "activityKeywords", activityKeyword(intent))) {
-                pois.addAll(searchByKeyword(planId, intent, PoiType.ENTERTAINMENT, keyword, anchor));
-            }
-            if (pois.stream().noneMatch(poi -> poi.getType() == PoiType.ENTERTAINMENT)) {
-                pois.addAll(searchByKeyword(planId, intent, PoiType.ENTERTAINMENT, fallbackActivityKeyword(intent), anchor));
+                final String kw = keyword;
+                futures.add(CompletableFuture.supplyAsync(
+                    () -> safeSearch(planId, intent, PoiType.ENTERTAINMENT, kw, anchor), executor));
             }
             for (String keyword : keywords(intent, "activityKeywords", "展览|文化|剧场|博物馆")) {
-                pois.addAll(searchByKeyword(planId, intent, PoiType.CULTURE, keyword, anchor));
+                final String kw = keyword;
+                futures.add(CompletableFuture.supplyAsync(
+                    () -> safeSearch(planId, intent, PoiType.CULTURE, kw, anchor), executor));
             }
             for (String keyword : keywords(intent, "diningKeywords", diningKeyword(intent))) {
-                pois.addAll(searchByKeyword(planId, intent, PoiType.DINING, keyword, anchor));
+                final String kw = keyword;
+                futures.add(CompletableFuture.supplyAsync(
+                    () -> safeSearch(planId, intent, PoiType.DINING, kw, anchor), executor));
             }
             for (String keyword : keywords(intent, "extraKeywords", "公园|书店|咖啡")) {
-                pois.addAll(searchByKeyword(planId, intent, PoiType.EXTRA, keyword, anchor));
+                final String kw = keyword;
+                futures.add(CompletableFuture.supplyAsync(
+                    () -> safeSearch(planId, intent, PoiType.EXTRA, kw, anchor), executor));
             }
+
+            // 等待所有并行任务完成
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+            List<Poi> pois = futures.stream()
+                    .map(f -> f.getNow(List.of()))
+                    .flatMap(List::stream)
+                    .collect(Collectors.toList());
+
+            // 若 ENTERTAINMENT 为空，补充 fallback
+            if (pois.stream().noneMatch(poi -> poi.getType() == PoiType.ENTERTAINMENT)) {
+                pois.addAll(searchByKeyword(planId, intent, PoiType.ENTERTAINMENT,
+                        fallbackActivityKeyword(intent), anchor));
+            }
+
             List<Poi> deduped = dedupePois(pois);
-            if (deduped.size() < 6) {
+            if (deduped.size() < MIN_DEDUPED_SIZE) {
                 return blockOrMock(planId, intent, "empty_or_too_few_results", SEARCH_PATH);
             }
             return deduped;
@@ -77,6 +113,14 @@ public class AmapPoiSearchTool {
             throw e;
         } catch (Exception e) {
             return blockOrMock(planId, intent, e.getClass().getSimpleName() + ": " + e.getMessage(), SEARCH_PATH);
+        }
+    }
+
+    private List<Poi> safeSearch(UUID planId, Map<String, Object> intent, PoiType type, String keyword, Anchor anchor) {
+        try {
+            return searchByKeyword(planId, intent, type, keyword, anchor);
+        } catch (Exception e) {
+            return List.of();
         }
     }
 
@@ -94,34 +138,36 @@ public class AmapPoiSearchTool {
                 ? URI.create(sourceUrl + "?key=" + encode(amap.getWebServiceKey())
                 + "&keywords=" + encode(keyword)
                 + cityQuery(city)
-                + "&offset=8&page=1&extensions=base")
+                + "&offset=" + POI_OFFSET + "&page=1&extensions=base")
                 : URI.create(sourceUrl + "?key=" + encode(amap.getWebServiceKey())
                 + "&keywords=" + encode(keyword)
                 + "&location=" + encode(anchor.lng() + "," + anchor.lat())
-                + "&radius=5000&sortrule=distance&offset=10&page=1&extensions=base");
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(amap.getTimeoutMs()))
-                .build();
+                + "&radius=" + AROUND_RADIUS + "&sortrule=distance&offset=" + POI_OFFSET + "&page=1&extensions=base");
+
         HttpResponse<String> response = null;
         Map<String, Object> body = Map.of();
         for (int attempt = 0; attempt < 3; attempt++) {
             requestLimiter.awaitSlot();
-            HttpRequest request = HttpRequest.newBuilder(uri)
-                    .timeout(Duration.ofMillis(amap.getTimeoutMs()))
-                    .GET()
-                    .build();
-            response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            body = objectMapper.readValue(response.body(), new TypeReference<>() {});
-            if (!isQpsLimited(body)) {
-                break;
+            try {
+                HttpRequest request = HttpRequest.newBuilder(uri)
+                        .timeout(Duration.ofMillis(amap.getTimeoutMs()))
+                        .GET()
+                        .build();
+                response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                body = objectMapper.readValue(response.body(), new TypeReference<>() {});
+                if (!isQpsLimited(body)) {
+                    break;
+                }
+                requestLimiter.backoff(attempt);
+            } finally {
+                requestLimiter.releaseSlot();
             }
-            requestLimiter.backoff(attempt);
         }
         List<Map<String, Object>> rawPois = castList(body.get("pois"));
         List<Poi> mapped = rawPois.stream()
                 .map(raw -> ExternalPoiMapper.fromAmap(raw, type))
                 .filter(poi -> poi.getLng() != 0.0 && poi.getLat() != 0.0 && hasVisibleName(poi.getName()))
-                .limit(5)
+                .limit(10)
                 .toList();
 
         Map<String, Object> output = new LinkedHashMap<>(traceService.externalMeta(
@@ -157,14 +203,16 @@ public class AmapPoiSearchTool {
                 + "&address=" + encode(district)
                 + cityQuery(city));
         requestLimiter.awaitSlot();
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(amap.getTimeoutMs()))
-                .build();
-        HttpRequest request = HttpRequest.newBuilder(uri)
-                .timeout(Duration.ofMillis(amap.getTimeoutMs()))
-                .GET()
-                .build();
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        HttpResponse<String> response;
+        try {
+            HttpRequest request = HttpRequest.newBuilder(uri)
+                    .timeout(Duration.ofMillis(amap.getTimeoutMs()))
+                    .GET()
+                    .build();
+            response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        } finally {
+            requestLimiter.releaseSlot();
+        }
         Map<String, Object> body = objectMapper.readValue(response.body(), new TypeReference<>() {});
         List<Map<String, Object>> geocodes = castList(body.get("geocodes"));
         Map<String, Object> first = geocodes.isEmpty() ? Map.of() : geocodes.get(0);
@@ -218,7 +266,7 @@ public class AmapPoiSearchTool {
         if (values.isEmpty()) {
             values.add(fallback);
         }
-        return values.stream().limit(4).toList();
+        return values.stream().limit(MAX_KEYWORDS_PER_TYPE).toList();
     }
 
     private List<Poi> dedupePois(List<Poi> pois) {

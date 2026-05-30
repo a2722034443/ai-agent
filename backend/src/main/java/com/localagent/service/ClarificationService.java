@@ -22,6 +22,8 @@ public class ClarificationService {
     public Map<String, Object> buildClarification(UUID planId, Map<String, Object> intent, String rawMessage) {
         List<Map<String, Object>> fields = missingFields(intent, rawMessage);
         intent.put("missingFields", fields.stream().map(field -> field.get("key")).toList());
+        // 无论是否需要澄清，都先应用默认值
+        applyDefaults(intent);
         if (fields.isEmpty()) {
             return Map.of();
         }
@@ -89,11 +91,11 @@ public class ClarificationService {
     private List<Map<String, Object>> missingFields(Map<String, Object> intent, String rawMessage) {
         List<Map<String, Object>> fields = new ArrayList<>();
         Map<String, Object> location = mutableMap(intent.get("location"));
-        Map<String, Object> group = mutableMap(intent.get("group"));
         Map<String, Object> timeWindow = mutableMap(intent.get("time_window"));
-        Map<String, Object> preferences = mutableMap(intent.get("soft_preferences"));
         String message = string(rawMessage);
 
+        // 只有 location 和 timeWindow.start 是真正必须澄清的字段
+        // 其余字段（duration、group、budget、preferences）给合理默认值，不触发澄清
         if (!hasActionableLocation(location)) {
             fields.add(field("location", "地点", locationQuestion(location),
                     locationSuggestions(message)));
@@ -102,23 +104,36 @@ public class ClarificationService {
             fields.add(field("timeWindow", "开始时间", timeQuestion(timeWindow),
                     timeSuggestions(message)));
         }
-        if (blank(timeWindow.get("durationMinutes")) && blank(timeWindow.get("end"))) {
-            fields.add(field("duration", "游玩时长", "大概想玩多久，或者最晚几点结束？",
-                    durationSuggestions(message)));
-        }
-        if (blank(group.get("total")) || blank(group.get("composition"))) {
-            fields.add(field("group", "同行人", "几个人同行？有没有孩子、老人、行动不便、宠物或其他照顾对象？",
-                    groupSuggestions(message)));
-        }
-        if (blank(preferences.get("budgetAmount")) && blank(preferences.get("budget"))) {
-            fields.add(field("budget", "预算", "这次总预算大概是多少？可以写金额或范围。",
-                    budgetSuggestions(group)));
-        }
-        if (blank(preferences.get("vibe"))) {
-            fields.add(field("preferences", "核心需求", "这次最想满足什么需求？也可以补充忌口、停车、排队、室内外等偏好。",
-                    preferenceSuggestions(message, group)));
-        }
         return fields;
+    }
+
+    private void applyDefaults(Map<String, Object> intent) {
+        Map<String, Object> timeWindow = mutableMap(intent.get("time_window"));
+        Map<String, Object> group = mutableMap(intent.get("group"));
+        Map<String, Object> preferences = mutableMap(intent.get("soft_preferences"));
+
+        // duration 默认 180 分钟
+        if (blank(timeWindow.get("durationMinutes")) && blank(timeWindow.get("end"))) {
+            timeWindow.put("durationMinutes", 180);
+            intent.put("time_window", timeWindow);
+        }
+        // group 默认 2 人 friends
+        if (blank(group.get("total"))) {
+            group.put("total", 2);
+            group.putIfAbsent("composition", "两人");
+            intent.put("group", group);
+        }
+        // budget 默认 500 元
+        if (blank(preferences.get("budgetAmount")) && blank(preferences.get("budget"))) {
+            preferences.put("budgetAmount", 500);
+            preferences.put("budget", "medium");
+            intent.put("soft_preferences", preferences);
+        }
+        // vibe 默认 general
+        if (blank(preferences.get("vibe"))) {
+            preferences.put("vibe", "轻松出行");
+            intent.put("soft_preferences", preferences);
+        }
     }
 
     private Map<String, Object> field(String key, String label, String question, List<String> suggestions) {

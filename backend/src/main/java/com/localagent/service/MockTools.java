@@ -38,16 +38,21 @@ public class MockTools {
 
     public Map<String, Object> route(UUID planId, List<Poi> stops) {
         long start = System.currentTimeMillis();
-        int travel = 0;
+        int totalSeconds = 0;
         double distance = 0.0;
+        List<Integer> segmentMinutes = new ArrayList<>();
         for (int i = 1; i < stops.size(); i++) {
             double segment = distanceKm(stops.get(i - 1), stops.get(i));
             distance += segment;
-            travel += Math.max(8, (int) Math.round(segment * 8));
+            int segSeconds = Math.max(60, (int) Math.round(segment * 240));  // 骑行约 15km/h
+            totalSeconds += segSeconds;
+            segmentMinutes.add(segSeconds / 60);
         }
+        int travel = totalSeconds / 60;
         Map<String, Object> output = new LinkedHashMap<>();
         output.put("travelMinutes", travel);
         output.put("distanceKm", Math.round(distance * 10.0) / 10.0);
+        output.put("segmentMinutes", segmentMinutes);
         output.put("source", "mock_route_estimate");
         output.putAll(traceService.externalMeta("mock", "mock", "local-distance", "ok"));
         trace(planId, "RouteEstimateTool", "ok", start, Map.of("stops", stops.stream().map(Poi::getName).toList()), output);
@@ -77,6 +82,10 @@ public class MockTools {
         List<Map<String, Object>> orders = new ArrayList<>();
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> timeline = (List<Map<String, Object>>) option.get("timeline");
+        if (timeline == null) {
+            trace(planId, "BookingTool", "ok", start, Map.of("rank", option.get("rank")), Map.of("orders", orders));
+            return orders;
+        }
         for (Map<String, Object> item : timeline) {
             String type = String.valueOf(item.get("type"));
             String name = String.valueOf(item.get("name"));
@@ -103,11 +112,26 @@ public class MockTools {
 
     public String share(UUID planId, Map<String, Object> option) {
         long start = System.currentTimeMillis();
-        String message = "搞定啦！下午14:00出发，先去" + option.get("firstStop") + "，然后去"
+        String startTime = extractStartTime(option);
+        String message = "搞定啦！" + startTime + "出发，先去" + option.get("firstStop") + "，然后去"
                 + option.get("diningName") + "吃饭，最后在" + option.get("lastStop")
                 + "收尾。所有预订都已安排好。";
         trace(planId, "ShareMessageTool", "ok", start, Map.of("rank", option.get("rank")), Map.of("message", message));
         return message;
+    }
+
+    @SuppressWarnings("unchecked")
+    private String extractStartTime(Map<String, Object> option) {
+        try {
+            List<Map<String, Object>> timeline = (List<Map<String, Object>>) option.get("timeline");
+            if (timeline != null && !timeline.isEmpty()) {
+                String time = String.valueOf(timeline.get(0).getOrDefault("time", ""));
+                if (!time.isBlank() && !"null".equals(time) && !"--:--".equals(time)) {
+                    return time;
+                }
+            }
+        } catch (Exception ignored) {}
+        return "出发时间";
     }
 
     public void recovery(UUID planId, String reason, String from, String to) {

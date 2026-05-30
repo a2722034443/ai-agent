@@ -11,35 +11,44 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 @Component
 public class AmapRouteEstimateTool {
-    private static final String DIRECTION_PATH = "/v3/direction/walking";
+    private static final String DIRECTION_PATH = "/v3/direction/bicycling";
 
     private final ExternalClientProperties properties;
     private final MockTools mockTools;
     private final ToolTraceService traceService;
     private final ObjectMapper objectMapper;
     private final AmapRequestLimiter requestLimiter;
+    private final HttpClient httpClient;
     private final boolean allowMockPoi;
     private final Map<UUID, Map<String, Map<String, Object>>> segmentCaches = new ConcurrentHashMap<>();
+    private final ExecutorService executor = Executors.newCachedThreadPool();
 
     public AmapRouteEstimateTool(ExternalClientProperties properties, MockTools mockTools,
                                  ToolTraceService traceService, ObjectMapper objectMapper,
                                  AmapRequestLimiter requestLimiter,
+                                 @Qualifier("amapHttpClient") HttpClient httpClient,
                                  @Value("${app.allow-mock-poi:false}") boolean allowMockPoi) {
         this.properties = properties;
         this.mockTools = mockTools;
         this.traceService = traceService;
         this.objectMapper = objectMapper;
         this.requestLimiter = requestLimiter;
+        this.httpClient = httpClient;
         this.allowMockPoi = allowMockPoi;
     }
 
@@ -49,14 +58,39 @@ public class AmapRouteEstimateTool {
             return blockOrMock(planId, stops, "missing_key", null);
         }
         try {
-            int travelMinutes = 0;
-            double distanceKm = 0.0;
-            Map<String, Map<String, Object>> segmentCache = segmentCaches.computeIfAbsent(planId, ignored -> new ConcurrentHashMap<>());
+            Map<String, Map<String, Object>> segmentCache =
+                    segmentCaches.computeIfAbsent(planId, ignored -> new ConcurrentHashMap<>());
+
+            // 并行计算所有相邻路线段
+            List<CompletableFuture<Map<String, Object>>> futures = new ArrayList<>();
             for (int i = 1; i < stops.size(); i++) {
-                Map<String, Object> segment = walkingSegment(planId, stops.get(i - 1), stops.get(i), segmentCache);
-                travelMinutes += ((Number) segment.getOrDefault("durationSeconds", 0)).intValue() / 60;
-                distanceKm += ((Number) segment.getOrDefault("distanceMeters", 0)).doubleValue() / 1000.0;
+                final Poi from = stops.get(i - 1);
+                final Poi to = stops.get(i);
+                futures.add(CompletableFuture.supplyAsync(
+                    () -> {
+                        try {
+                            return walkingSegment(planId, from, to, segmentCache);
+                        } catch (Exception e) {
+                            return Map.of();
+                        }
+                    }, executor));
             }
+
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+
+            // 先累加秒数，最后统一除以60，避免逐段整除精度损失
+            int totalSeconds = 0;
+            double distanceKm = 0.0;
+            List<Integer> segmentMinutes = new ArrayList<>();
+            for (CompletableFuture<Map<String, Object>> f : futures) {
+                Map<String, Object> segment = f.getNow(Map.of());
+                int seconds = ((Number) segment.getOrDefault("durationSeconds", 0)).intValue();
+                totalSeconds += seconds;
+                distanceKm += ((Number) segment.getOrDefault("distanceMeters", 0)).doubleValue() / 1000.0;
+                segmentMinutes.add(seconds / 60);
+            }
+            int travelMinutes = totalSeconds / 60;
+
             if (travelMinutes <= 0 || distanceKm <= 0.0) {
                 return blockOrMock(planId, stops, "empty_route", DIRECTION_PATH);
             }
@@ -64,7 +98,8 @@ public class AmapRouteEstimateTool {
                     "amap", "real", properties.getAmap().getBaseUrl() + DIRECTION_PATH, "ok"));
             output.put("travelMinutes", travelMinutes);
             output.put("distanceKm", Math.round(distanceKm * 10.0) / 10.0);
-            output.put("source", "amap_walking_direction");
+            output.put("segmentMinutes", segmentMinutes);
+            output.put("source", "amap_bicycling_direction");
             traceService.trace(planId, "AmapRouteEstimateTool", "ok", System.currentTimeMillis(),
                     Map.of("stops", stops.stream().map(Poi::getName).toList()), output);
             return output;
@@ -92,23 +127,25 @@ public class AmapRouteEstimateTool {
         URI uri = URI.create(sourceUrl + "?key=" + encode(amap.getWebServiceKey())
                 + "&origin=" + encode(from.getLng() + "," + from.getLat())
                 + "&destination=" + encode(to.getLng() + "," + to.getLat()));
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(amap.getTimeoutMs()))
-                .build();
+
         HttpResponse<String> response = null;
         Map<String, Object> body = Map.of();
         for (int attempt = 0; attempt < 3; attempt++) {
             requestLimiter.awaitSlot();
-            HttpRequest request = HttpRequest.newBuilder(uri)
-                    .timeout(Duration.ofMillis(amap.getTimeoutMs()))
-                    .GET()
-                    .build();
-            response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            body = objectMapper.readValue(response.body(), new TypeReference<>() {});
-            if (!isQpsLimited(body)) {
-                break;
+            try {
+                HttpRequest request = HttpRequest.newBuilder(uri)
+                        .timeout(Duration.ofMillis(amap.getTimeoutMs()))
+                        .GET()
+                        .build();
+                response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                body = objectMapper.readValue(response.body(), new TypeReference<>() {});
+                if (!isQpsLimited(body)) {
+                    break;
+                }
+                requestLimiter.backoff(attempt);
+            } finally {
+                requestLimiter.releaseSlot();
             }
-            requestLimiter.backoff(attempt);
         }
         Map<String, Object> route = castMap(body.get("route"));
         List<Map<String, Object>> paths = castList(route.get("paths"));
@@ -116,7 +153,7 @@ public class AmapRouteEstimateTool {
         int durationSeconds = parseInt(first.get("duration"));
         int distanceMeters = parseInt(first.get("distance"));
         Map<String, Object> output = new LinkedHashMap<>(traceService.externalMeta(
-                "amap", "real", sourceUrl, String.valueOf(body.getOrDefault("infocode", response.statusCode()))));
+                "amap", "real", sourceUrl, String.valueOf(body.getOrDefault("infocode", response == null ? "" : response.statusCode()))));
         output.put("from", from.getName());
         output.put("to", to.getName());
         output.put("durationSeconds", durationSeconds);

@@ -1,5 +1,6 @@
 package com.localagent.service;
 
+import jakarta.annotation.PostConstruct;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -22,12 +23,28 @@ public class PromptCatalog {
     };
 
     private final String pipelinePath;
+    private Map<String, String> cachedPrompts;
+    private String cachedPipeline;
 
     public PromptCatalog(@Value("${agent.pipeline:../agents/pipeline.yml}") String pipelinePath) {
         this.pipelinePath = pipelinePath;
     }
 
+    @PostConstruct
+    public void init() {
+        cachedPrompts = loadPromptsFromDisk();
+        cachedPipeline = loadPipelineFromDisk();
+    }
+
     public Map<String, String> loadPrompts() {
+        return cachedPrompts != null ? cachedPrompts : loadPromptsFromDisk();
+    }
+
+    public String loadPipeline() {
+        return cachedPipeline != null ? cachedPipeline : loadPipelineFromDisk();
+    }
+
+    private Map<String, String> loadPromptsFromDisk() {
         Map<String, String> loaded = new LinkedHashMap<>();
         Path promptDir = resolveProjectPath("prompts");
         for (String prompt : PROMPTS) {
@@ -41,7 +58,7 @@ public class PromptCatalog {
         return loaded;
     }
 
-    public String loadPipeline() {
+    private String loadPipelineFromDisk() {
         Path file = resolveFromUserDir(pipelinePath);
         try {
             return Files.exists(file) ? Files.readString(file, StandardCharsets.UTF_8) : "missing";
