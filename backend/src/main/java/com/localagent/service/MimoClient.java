@@ -12,6 +12,7 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -20,10 +21,13 @@ public class MimoClient {
 
     private final ExternalClientProperties properties;
     private final ObjectMapper objectMapper;
+    private final HttpClient httpClient;
 
-    public MimoClient(ExternalClientProperties properties, ObjectMapper objectMapper) {
+    public MimoClient(ExternalClientProperties properties, ObjectMapper objectMapper,
+                      @Qualifier("llmHttpClient") HttpClient httpClient) {
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.httpClient = httpClient;
     }
 
     public String complete(String systemPrompt, String userPrompt) {
@@ -61,16 +65,13 @@ public class MimoClient {
         ));
 
         String sourceUrl = llm.getBaseUrl() + CHAT_COMPLETIONS_PATH;
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofMillis(llm.getTimeoutMs()))
-                .build();
         HttpRequest request = HttpRequest.newBuilder(URI.create(sourceUrl))
                 .timeout(Duration.ofMillis(llm.getTimeoutMs()))
                 .header("Content-Type", "application/json")
                 .header("api-key", llm.getApiKey())
                 .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body), StandardCharsets.UTF_8))
                 .build();
-        HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         if (response.statusCode() >= 400) {
             throw new IllegalStateException("MiMo API 状态码异常：" + response.statusCode());
         }

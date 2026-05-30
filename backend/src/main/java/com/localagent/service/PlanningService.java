@@ -369,7 +369,10 @@ public class PlanningService {
                 .sorted(Comparator.comparing((Map<String, Object> it) -> ((Number) it.get("score")).doubleValue()).reversed())
                 .toList();
         for (int index = 0; index < sorted.size(); index++) {
-            sorted.get(index).put("rank", index + 1);
+            int newRank = index + 1;
+            sorted.get(index).put("rank", newRank);
+            sorted.get(index).put("name", newRank == 1 ? "稳妥轻松方案" : newRank == 2 ? "体验丰富方案" : "备用省心方案");
+            sorted.get(index).put("tagline", newRank == 1 ? "距离更近，节奏更稳" : newRank == 2 ? "内容更丰富，适合慢慢玩" : "临时调整也容易执行");
         }
         return sorted;
     }
@@ -432,7 +435,7 @@ public class PlanningService {
             return true;
         }
         int tolerance = Math.max(30, duration / 5);
-        return totalMinutes <= duration + tolerance;
+        return totalMinutes >= duration - tolerance && totalMinutes <= duration + tolerance;
     }
 
     private double durationScore(Map<String, Object> intent, int totalMinutes) {
@@ -562,11 +565,15 @@ public class PlanningService {
 
     private Map<String, Object> option(int rank, List<Poi> stops, Map<String, Object> route, int totalMinutes,
                                        Map<String, Object> intent, Map<String, Object> weather) {
+        // 从 route 中读取分段时间，用于准确计算每站开始时间
+        List<Integer> segmentMinutes = castSegmentMinutes(route.get("segmentMinutes"));
+        LocalTime currentTime = parseStartTime(intent);
+
         List<Map<String, Object>> timeline = new ArrayList<>();
         for (int i = 0; i < stops.size(); i++) {
             Poi poi = stops.get(i);
             Map<String, Object> timelineItem = new LinkedHashMap<>();
-            timelineItem.put("time", startTime(intent, i));
+            timelineItem.put("time", currentTime.toString());
             timelineItem.put("type", poi.getType() == PoiType.DINING ? "餐饮" : i == 2 ? "补充" : "活动");
             timelineItem.put("name", poi.getName());
             timelineItem.put("subtype", poi.getSubtype());
@@ -579,18 +586,28 @@ public class PlanningService {
             timelineItem.put("lng", poi.getLng());
             timelineItem.put("lat", poi.getLat());
             timeline.add(timelineItem);
+            // 累加当前站点停留时间 + 到下一站的交通时间
+            currentTime = currentTime.plusMinutes(poi.getDurationMinutes());
+            if (i < segmentMinutes.size()) {
+                currentTime = currentTime.plusMinutes(segmentMinutes.get(i));
+            }
         }
         int groupTotal = groupTotal(intent);
         int budget = stops.stream().mapToInt(Poi::getAvgPrice).sum() * groupTotal;
-        double score = stops.stream().mapToDouble(Poi::getRating).average().orElse(4.0) * 20
-                + durationScore(intent, totalMinutes)
-                + Math.max(0, 12.0 - ((Number) route.getOrDefault("distanceKm", 0)).doubleValue());
+        double distanceKm = ((Number) route.getOrDefault("distanceKm", 0)).doubleValue();
+
+        // 归一化评分：三项各占 0-40/0-20/0-40，总分 0-100
+        double ratingScore = stops.stream().mapToDouble(Poi::getRating).average().orElse(4.0) / 5.0 * 40.0;
+        double durScore = durationScore(intent, totalMinutes);
+        double distScore = Math.max(0, 1.0 - distanceKm / MAX_ROUTE_DISTANCE_KM) * 40.0;
+        double score = ratingScore + durScore + distScore;
 
         Map<String, Object> option = new LinkedHashMap<>();
         option.put("rank", rank);
         option.put("score", Math.round(score * 10.0) / 10.0);
-        option.put("name", rank == 1 ? "稳妥轻松方案" : rank == 2 ? "体验丰富方案" : "备用省心方案");
-        option.put("tagline", rank == 1 ? "距离更近，节奏更稳" : rank == 2 ? "内容更丰富，适合慢慢玩" : "临时调整也容易执行");
+        // name/tagline 暂时用 rank 占位，排序后会被覆盖
+        option.put("name", "方案 " + rank);
+        option.put("tagline", "基于真实周边地点生成");
         option.put("timeline", timeline);
         option.put("totalMinutes", totalMinutes);
         option.put("budgetEstimate", budget);
@@ -635,15 +652,23 @@ public class PlanningService {
     }
 
     @SuppressWarnings("unchecked")
-    private String startTime(Map<String, Object> intent, int index) {
+    private LocalTime parseStartTime(Map<String, Object> intent) {
         Object timeWindowValue = intent.get("time_window");
         Map<String, Object> timeWindow = timeWindowValue instanceof Map<?, ?> ? (Map<String, Object>) timeWindowValue : Map.of();
         String start = String.valueOf(timeWindow.get("start"));
         try {
-            return LocalTime.parse(start).plusMinutes(index * 95L).toString();
+            return LocalTime.parse(start);
         } catch (DateTimeParseException e) {
-            return "--:--";
+            return LocalTime.of(14, 0);
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Integer> castSegmentMinutes(Object value) {
+        if (!(value instanceof List<?> list)) return List.of();
+        return list.stream()
+                .map(item -> item instanceof Number n ? n.intValue() : 0)
+                .toList();
     }
 
     private int clamp(int value, int min, int max) {

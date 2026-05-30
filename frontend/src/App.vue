@@ -181,11 +181,28 @@
         </div>
       </div>
 
+      <!-- loading 进度提示 -->
+      <div v-if="loading" class="loading-steps">
+        <span class="loading-dot"></span>
+        <span :class="['step', { active: loadingStep >= 0 }]">解析意图</span>
+        <span class="step-arrow">›</span>
+        <span :class="['step', { active: loadingStep >= 1 }]">搜索地点</span>
+        <span class="step-arrow">›</span>
+        <span :class="['step', { active: loadingStep >= 2 }]">计算路线</span>
+        <span class="step-arrow">›</span>
+        <span :class="['step', { active: loadingStep >= 3 }]">生成方案</span>
+      </div>
+
       <section v-if="clarificationFields.length" class="clarify-box">
-        <h3>{{ clarification.message || '还需要补齐关键信息' }}</h3>
-        <article v-for="field in clarificationFields" :key="field.key">
-          <strong>{{ field.label }}</strong>
-          <p>{{ field.question || field.reason }}</p>
+        <div class="clarify-header">
+          <span class="clarify-icon">✦</span>
+          <h3>{{ clarification.message || '还需要补齐关键信息' }}</h3>
+        </div>
+        <article v-for="field in clarificationFields" :key="field.key" class="clarify-field">
+          <div class="field-label">
+            <strong>{{ field.label }}</strong>
+            <p>{{ field.question || field.reason }}</p>
+          </div>
           <div class="choice-row">
             <button
               v-for="choice in fieldChoices(field)"
@@ -199,18 +216,43 @@
           </div>
           <input v-model="clarificationAnswers[field.key]" :placeholder="field.expectedAnswerHint || '也可以直接输入你的答案'" />
         </article>
-        <button class="primary-button" type="button" :disabled="loading" @click="submitClarification">补齐后生成方案</button>
+        <button class="primary-button clarify-submit" type="button" :disabled="loading" @click="submitClarification">
+          {{ loading ? '生成中…' : '补齐后生成方案' }}
+        </button>
       </section>
 
       <section v-if="options.length" class="plan-results">
-        <article v-for="option in options" :key="option.rank" :class="{ selected: selectedRank === option.rank }">
-          <button type="button" @click="selectedRank = option.rank">{{ option.rank }}</button>
-          <div>
-            <strong>{{ option.name || `方案 ${option.rank}` }}</strong>
-            <p>{{ option.tagline || '基于真实周边地点生成' }}</p>
-            <span>{{ formatHours(option.totalMinutes) }} · {{ formatMoney(option.budgetEstimate) }} · {{ option.route?.distanceKm || '-' }}km</span>
+        <article
+          v-for="option in options"
+          :key="option.rank"
+          :class="['plan-card', { selected: selectedRank === option.rank }]"
+          @click="selectedRank = option.rank"
+        >
+          <div class="plan-card-head">
+            <div class="plan-rank">{{ option.rank }}</div>
+            <div class="plan-meta">
+              <strong>{{ option.name || `方案 ${option.rank}` }}</strong>
+              <p>{{ option.tagline || '基于真实周边地点生成' }}</p>
+            </div>
+            <button class="confirm-btn" type="button" :disabled="loading" @click.stop="confirm(option.rank)">
+              {{ loading && selectedRank === option.rank ? '…' : '出发' }}
+            </button>
           </div>
-          <button class="soft-action" type="button" :disabled="loading" @click="confirm(option.rank)">确认</button>
+          <div class="plan-stats">
+            <span>⏱ {{ formatHours(option.totalMinutes) }}</span>
+            <span>💰 {{ formatMoney(option.budgetEstimate) }}</span>
+            <span>📍 {{ option.route?.distanceKm || '-' }}km</span>
+          </div>
+          <ol v-if="option.timeline?.length" class="timeline">
+            <li v-for="(stop, idx) in option.timeline" :key="idx" :class="['tl-item', stop.type === '餐饮' ? 'dining' : 'activity']">
+              <span class="tl-time">{{ stop.time }}</span>
+              <span class="tl-dot"></span>
+              <div class="tl-content">
+                <strong>{{ stop.name }}</strong>
+                <span>{{ stop.type }} · {{ stop.durationMinutes }}分钟</span>
+              </div>
+            </li>
+          </ol>
         </article>
         <label class="feedback-line">
           <input v-model="feedback" placeholder="例如：预算太高、太远了、换一家餐厅" />
@@ -218,7 +260,13 @@
         </label>
       </section>
 
-      <p v-if="execution" class="execution-line">{{ execution.shareMessage }}</p>
+      <div v-if="execution" class="execution-card">
+        <div class="execution-icon">✓</div>
+        <div>
+          <strong>方案已确认执行</strong>
+          <p>{{ execution.shareMessage }}</p>
+        </div>
+      </div>
       <p v-if="error" class="error-line">{{ error }}</p>
     </section>
 
@@ -274,6 +322,7 @@ const searchText = ref('')
 const message = ref('今天晚上 7 点在上海静安寺附近，4 个朋友，预算 800 元，想先找一个有意思的地方再吃饭，路线不要太折腾。')
 const feedback = ref('')
 const loading = ref(false)
+const loadingStep = ref(-1)
 const error = ref('')
 const currentPlanId = ref('')
 const options = ref([])
@@ -286,12 +335,12 @@ const selectedRank = ref(1)
 const activeDock = ref('home')
 const activePlanet = ref(null)
 const activeTimeFilter = ref('全部')
-const drawerVisible = ref(true)
+const drawerVisible = ref(false)
 const toolMenuOpen = ref(false)
 const voiceRecording = ref(false)
 const inputFocused = ref(false)
 const compactMap = ref(false)
-const legendOpen = ref(true)
+const legendOpen = ref(false)
 const zoomLevel = ref(1)
 const fileInput = ref(null)
 
@@ -306,10 +355,10 @@ const planets = [
     y: 66,
     strength: 'strong',
     tags: [
-      { text: '高铁优先', x: -90, y: -44 },
-      { text: '航班时段', x: -110, y: 5 },
-      { text: '公共交通', x: -55, y: 64 },
-      { text: '临时改签', x: 82, y: 22 }
+      { text: '火锅', x: -90, y: -44 },
+      { text: '轻食', x: -110, y: 5 },
+      { text: '约会餐厅', x: -55, y: 64 },
+      { text: '亲子餐厅', x: 82, y: 22 }
     ]
   },
   {
@@ -322,10 +371,10 @@ const planets = [
     y: 37,
     strength: 'medium',
     tags: [
-      { text: '费用分析', x: -92, y: -66 },
-      { text: '预算预估', x: 50, y: -94 },
-      { text: '控制超支', x: 92, y: 36 },
-      { text: '分段预算', x: 60, y: 96 }
+      { text: '儿童乐园', x: -92, y: -66 },
+      { text: '博物馆', x: 50, y: -94 },
+      { text: '科技馆', x: 92, y: 36 },
+      { text: '亲子活动', x: 60, y: 96 }
     ]
   },
   {
@@ -338,10 +387,10 @@ const planets = [
     y: 63,
     strength: 'strong',
     tags: [
-      { text: '行程穿插', x: -112, y: -6 },
-      { text: '城市漫游', x: 84, y: -62 },
-      { text: '美食体验', x: 96, y: 44 },
-      { text: '演出展览', x: 72, y: 96 }
+      { text: '展览', x: -112, y: -6 },
+      { text: '密室逃脱', x: 84, y: -62 },
+      { text: 'KTV', x: 96, y: 44 },
+      { text: '桌游', x: 72, y: 96 }
     ]
   },
   {
@@ -354,10 +403,10 @@ const planets = [
     y: 38,
     strength: 'medium',
     tags: [
-      { text: '自然风光', x: -130, y: -24 },
-      { text: '海滨度假', x: -118, y: 48 },
-      { text: '小众秘境', x: -44, y: 112 },
-      { text: '季节限定', x: 50, y: -104 }
+      { text: '潮流商圈', x: -130, y: -24 },
+      { text: '市集', x: -118, y: 48 },
+      { text: '打卡地', x: -44, y: 112 },
+      { text: '网红店', x: 50, y: -104 }
     ]
   },
   {
@@ -370,10 +419,10 @@ const planets = [
     y: 83,
     strength: 'weak',
     tags: [
-      { text: '独自出行', x: -116, y: -24 },
-      { text: '情侣出游', x: -118, y: 46 },
-      { text: '朋友结伴', x: -36, y: 106 },
-      { text: '偏好适配', x: 86, y: 58 }
+      { text: '烧烤', x: -116, y: -24 },
+      { text: '聚餐', x: -118, y: 46 },
+      { text: '夜场', x: -36, y: 106 },
+      { text: '轰趴', x: 86, y: 58 }
     ]
   },
   {
@@ -386,10 +435,10 @@ const planets = [
     y: 82,
     strength: 'strong',
     tags: [
-      { text: '连住酒店', x: -126, y: -54 },
-      { text: '品牌酒店', x: -116, y: 2 },
-      { text: '评价优先', x: -40, y: 104 },
-      { text: '特色民宿', x: 86, y: -62 }
+      { text: '公园跑步', x: -126, y: -54 },
+      { text: '健身', x: -116, y: 2 },
+      { text: '骑行', x: -40, y: 104 },
+      { text: '户外', x: 86, y: -62 }
     ]
   }
 ]
@@ -549,21 +598,29 @@ async function ensureSession() {
 async function plan() {
   if (!message.value.trim() || loading.value) return
   loading.value = true
+  loadingStep.value = 0
   error.value = ''
   execution.value = null
   drawerVisible.value = true
+  const stepTimer = setInterval(() => {
+    if (loadingStep.value < 3) loadingStep.value++
+  }, 2500)
   try {
     await ensureSession()
+    loadingStep.value = 1
     const data = await createPlan({
       message: message.value,
       planCount: 3,
       stopCountPreference: '标准'
     })
+    loadingStep.value = 3
     applyPlan(data)
   } catch (err) {
     handleRequestError(err)
   } finally {
+    clearInterval(stepTimer)
     loading.value = false
+    loadingStep.value = -1
   }
 }
 
@@ -661,8 +718,15 @@ function formatMoney(value) {
 .instant-app {
   position: relative;
   min-height: 100vh;
+  min-height: 100svh;
   overflow: hidden;
-  padding: 14px 28px 110px;
+  --page-edge: clamp(20px, 2.1vw, 44px);
+  --topbar-height: 78px;
+  --left-panel-width: clamp(310px, 18.6vw, 380px);
+  --right-panel-width: clamp(320px, 19vw, 398px);
+  --side-rail: clamp(350px, 25vw, 500px);
+  --bottom-safe: 224px;
+  padding: 14px var(--page-edge) var(--bottom-safe);
   color: #1d2436;
   background:
     radial-gradient(circle at 50% 48%, rgba(98, 126, 255, .28), transparent 20%),
@@ -697,6 +761,10 @@ function formatMoney(value) {
   backdrop-filter: blur(24px);
 }
 
+.instant-app > * {
+  min-width: 0;
+}
+
 button,
 input {
   font: inherit;
@@ -716,9 +784,10 @@ button:disabled {
   position: relative;
   z-index: 10;
   display: grid;
-  grid-template-columns: 300px minmax(320px, 1fr) 240px;
+  grid-template-columns: minmax(260px, 360px) minmax(300px, 1fr) minmax(150px, 220px);
   align-items: center;
-  gap: 24px;
+  gap: clamp(16px, 2vw, 28px);
+  min-height: var(--topbar-height);
 }
 
 .brand {
@@ -733,7 +802,7 @@ button:disabled {
 
 .brand strong {
   display: block;
-  font-size: 32px;
+  font-size: clamp(26px, 1.55vw, 32px);
   line-height: 1;
   font-weight: 900;
 }
@@ -742,12 +811,13 @@ button:disabled {
   display: block;
   margin-top: 8px;
   color: rgba(29,36,54,.68);
-  font-size: 15px;
+  font-size: 14px;
+  line-height: 1.35;
 }
 
 .brand-orbit {
-  width: 74px;
-  height: 74px;
+  width: clamp(58px, 3.7vw, 74px);
+  height: clamp(58px, 3.7vw, 74px);
   flex: 0 0 auto;
   border-radius: 50%;
   background:
@@ -767,7 +837,7 @@ button:disabled {
 }
 
 .search-pill {
-  height: 66px;
+  height: clamp(56px, 3.3vw, 66px);
   display: flex;
   align-items: center;
   gap: 18px;
@@ -822,12 +892,12 @@ button:disabled {
   justify-content: flex-end;
   gap: 22px;
   color: #22293a;
-  font-size: 20px;
+  font-size: clamp(16px, 1vw, 20px);
 }
 
 .avatar {
-  width: 70px;
-  height: 70px;
+  width: clamp(58px, 3.5vw, 70px);
+  height: clamp(58px, 3.5vw, 70px);
   border-radius: 50%;
   border: 3px solid rgba(255,255,255,.92);
   background: linear-gradient(140deg, #1a1f2a, #e8e9ef);
@@ -856,11 +926,12 @@ button:disabled {
 .status-card {
   position: absolute;
   z-index: 5;
-  left: 40px;
-  top: 120px;
-  width: 420px;
-  border-radius: 28px;
-  padding: 28px 30px 20px;
+  left: var(--page-edge);
+  top: calc(14px + var(--topbar-height) + 18px);
+  width: var(--left-panel-width);
+  max-width: 100%;
+  border-radius: 24px;
+  padding: clamp(18px, 1.25vw, 24px);
 }
 
 .card-title,
@@ -877,7 +948,7 @@ button:disabled {
 .planner-drawer h2 {
   margin: 0;
   color: #111729;
-  font-size: 22px;
+  font-size: clamp(20px, 1.1vw, 22px);
 }
 
 .card-title span,
@@ -890,8 +961,8 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 28px 0 12px;
-  font-size: 32px;
+  margin: 20px 0 10px;
+  font-size: clamp(27px, 1.55vw, 32px);
 }
 
 .status-card h1 b {
@@ -913,17 +984,18 @@ button:disabled {
 
 .progress-list {
   display: grid;
-  gap: 18px;
+  gap: 12px;
   padding: 0;
-  margin: 26px 0 24px;
+  margin: 18px 0 18px;
   list-style: none;
 }
 
 .progress-list li {
   display: grid;
-  grid-template-columns: 28px 118px minmax(0, 1fr) 48px;
+  grid-template-columns: 24px minmax(92px, .78fr) minmax(0, 1fr) 42px;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  font-size: 14px;
 }
 
 .progress-list em {
@@ -954,23 +1026,23 @@ button:disabled {
 
 .soft-action {
   width: 100%;
-  min-height: 42px;
+  min-height: 38px;
 }
 
 .toolbar {
   position: absolute;
   z-index: 6;
-  left: 42px;
-  top: 632px;
+  left: calc(var(--page-edge) + var(--left-panel-width) + 16px);
+  top: calc(14px + var(--topbar-height) + 18px);
   display: grid;
-  gap: 22px;
-  width: 72px;
-  padding: 20px 0;
-  border-radius: 24px;
+  gap: 12px;
+  width: 58px;
+  padding: 12px 0;
+  border-radius: 20px;
 }
 
 .toolbar button {
-  min-height: 28px;
+  min-height: 34px;
   background: transparent;
   color: #111729;
   font-size: 30px;
@@ -981,11 +1053,11 @@ button:disabled {
 .legend-card {
   position: absolute;
   z-index: 6;
-  left: 44px;
-  bottom: 210px;
-  width: 146px;
+  left: calc(var(--page-edge) + var(--left-panel-width) + 16px);
+  top: calc(14px + var(--topbar-height) + 282px);
+  width: min(190px, var(--left-panel-width));
   border-radius: 24px;
-  padding: 20px 24px;
+  padding: 18px 22px;
 }
 
 .legend-card ol {
@@ -1039,10 +1111,11 @@ button:disabled {
 .star-map {
   position: relative;
   z-index: 2;
-  width: min(1100px, 72vw);
-  height: min(760px, calc(100vh - 240px));
-  min-height: 600px;
-  margin: 86px auto 0;
+  width: clamp(680px, calc(100vw - var(--side-rail) - var(--side-rail)), 960px);
+  height: clamp(500px, calc(100svh - 314px), 680px);
+  min-height: 0;
+  margin: clamp(40px, 5.2vh, 72px) auto 0;
+  overflow: visible;
   transform: scale(var(--zoom));
   transform-origin: 50% 52%;
   transition: transform .24s ease;
@@ -1092,9 +1165,9 @@ button:disabled {
   left: 50%;
   top: 52%;
   z-index: 5;
-  width: 170px;
-  height: 170px;
-  margin: -85px 0 0 -85px;
+  width: clamp(132px, 8.4vw, 170px);
+  height: clamp(132px, 8.4vw, 170px);
+  transform: translate(-50%, -50%);
   border: 2px solid rgba(255,255,255,.78);
   background:
     radial-gradient(circle at 45% 35%, rgba(255,255,255,.88), transparent 10%),
@@ -1103,21 +1176,22 @@ button:disabled {
 }
 
 .planet-center span {
-  font-size: 52px;
+  font-size: clamp(40px, 2.55vw, 52px);
   font-weight: 900;
 }
 
 .planet-node {
   position: absolute;
   z-index: 4;
-  width: 142px;
-  height: 142px;
-  margin: -71px 0 0 -71px;
+  --node-size: clamp(112px, 6.9vw, 142px);
+  width: var(--node-size);
+  height: var(--node-size);
+  transform: translate(-50%, -50%);
 }
 
 .planet-node .planet {
-  width: 142px;
-  height: 142px;
+  width: var(--node-size);
+  height: var(--node-size);
   border: 2px solid rgba(255,255,255,.72);
   background:
     radial-gradient(circle at 38% 28%, rgba(255,255,255,.92), transparent 13%),
@@ -1126,16 +1200,21 @@ button:disabled {
 }
 
 .planet-node .planet span {
-  font-size: 25px;
+  font-size: clamp(20px, 1.25vw, 25px);
   font-weight: 900;
   text-shadow: 0 2px 12px rgba(55,63,100,.24);
 }
 
 .planet-node.active .planet,
-.planet-center.active,
 .planet:hover,
 .planet-center:hover {
   transform: scale(1.06);
+  opacity: .94;
+}
+
+.planet-center.active,
+.planet-center:hover {
+  transform: translate(-50%, -50%) scale(1.06);
   opacity: .94;
 }
 
@@ -1143,9 +1222,9 @@ button:disabled {
 .more-dot {
   position: absolute;
   z-index: 6;
-  min-width: 84px;
-  min-height: 38px;
-  padding: 0 15px;
+  min-width: clamp(72px, 4.2vw, 86px);
+  min-height: 36px;
+  padding: 0 13px;
   border-radius: 999px;
   border: 1px solid rgba(255,255,255,.86);
   background: rgba(255,255,255,.46);
@@ -1169,11 +1248,12 @@ button:disabled {
 .insight-card {
   position: absolute;
   z-index: 5;
-  right: 40px;
-  top: 120px;
-  width: 398px;
+  right: var(--page-edge);
+  top: calc(14px + var(--topbar-height) + 18px);
+  width: var(--right-panel-width);
+  max-width: 100%;
   border-radius: 28px;
-  padding: 28px 30px;
+  padding: clamp(22px, 1.5vw, 28px);
 }
 
 .insight-card .card-title button {
@@ -1204,8 +1284,8 @@ button:disabled {
 .time-filter {
   position: absolute;
   z-index: 6;
-  right: 64px;
-  top: 52%;
+  right: calc(var(--page-edge) + 20px);
+  top: 49%;
   display: grid;
   gap: 18px;
   width: 96px;
@@ -1228,10 +1308,10 @@ button:disabled {
 .mini-map {
   position: absolute;
   z-index: 6;
-  right: 64px;
-  bottom: 218px;
-  width: 180px;
-  height: 132px;
+  right: calc(var(--page-edge) + 20px);
+  bottom: calc(var(--bottom-safe) + 18px);
+  width: clamp(142px, 8.8vw, 180px);
+  height: clamp(104px, 6.5vw, 132px);
   border-radius: 22px;
 }
 
@@ -1255,10 +1335,10 @@ button:disabled {
 .planner-drawer {
   position: absolute;
   z-index: 12;
-  right: 260px;
-  bottom: 214px;
-  width: min(560px, calc(100vw - 560px));
-  max-height: 46vh;
+  right: clamp(220px, 13vw, 292px);
+  bottom: calc(var(--bottom-safe) + 18px);
+  width: clamp(380px, 28vw, 540px);
+  max-height: min(42vh, 420px);
   overflow: auto;
   border-radius: 24px;
   padding: 22px;
@@ -1331,31 +1411,272 @@ button:disabled {
 .clarify-box,
 .plan-results {
   display: grid;
-  gap: 12px;
+  gap: 14px;
   margin-top: 18px;
+}
+
+.clarify-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.clarify-icon {
+  color: #8e77ee;
+  font-size: 18px;
 }
 
 .clarify-box h3 {
   margin: 0;
+  font-size: 17px;
+  color: #111729;
 }
 
-.clarify-box article,
-.plan-results article {
+.clarify-field {
   border-radius: 18px;
-  padding: 14px;
+  padding: 16px;
+  background: rgba(255,255,255,.52);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.82);
+  display: grid;
+  gap: 10px;
+}
+
+.field-label strong {
+  display: block;
+  font-size: 15px;
+  color: #111729;
+  margin-bottom: 4px;
+}
+
+.field-label p {
+  margin: 0;
+  font-size: 13px;
+  color: rgba(29,36,54,.62);
+}
+
+.clarify-submit {
+  width: 100%;
+  margin-top: 4px;
+}
+
+/* 方案卡片 */
+.plan-card {
+  border-radius: 20px;
+  padding: 16px;
+  background: rgba(255,255,255,.48);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.82);
+  cursor: pointer;
+  transition: box-shadow .18s ease, transform .18s ease;
+}
+
+.plan-card.selected {
+  box-shadow: 0 0 0 2px rgba(74, 118, 255, .38), inset 0 1px 0 rgba(255,255,255,.82);
+}
+
+.plan-card-head {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) 72px;
+  align-items: center;
+  gap: 12px;
+}
+
+.plan-rank {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #4b83ff, #7b68ee);
+  color: #fff;
+  font-weight: 900;
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.plan-meta strong {
+  display: block;
+  font-size: 15px;
+  color: #111729;
+}
+
+.plan-meta p {
+  margin: 3px 0 0;
+  font-size: 13px;
+  color: rgba(29,36,54,.62);
+}
+
+.confirm-btn {
+  min-height: 36px;
+  border-radius: 999px;
+  padding: 0 16px;
+  background: linear-gradient(135deg, #4b83ff, #7b68ee);
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+  box-shadow: 0 6px 14px rgba(75, 105, 238, .22);
+  transition: transform .18s ease, opacity .18s ease;
+}
+
+.confirm-btn:hover {
+  transform: scale(1.04);
+}
+
+.confirm-btn:disabled {
+  opacity: .5;
+}
+
+.plan-stats {
+  display: flex;
+  gap: 14px;
+  margin: 10px 0 12px;
+  font-size: 13px;
+  color: rgba(29,36,54,.68);
+}
+
+/* 时间线 */
+.timeline {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0;
+}
+
+.tl-item {
+  display: grid;
+  grid-template-columns: 48px 14px minmax(0, 1fr);
+  gap: 0 10px;
+  align-items: start;
+  padding: 6px 0;
+  position: relative;
+}
+
+.tl-item:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  left: 54px;
+  top: 22px;
+  bottom: -6px;
+  width: 2px;
+  background: rgba(74, 118, 255, .18);
+}
+
+.tl-time {
+  font-size: 12px;
+  color: rgba(29,36,54,.52);
+  text-align: right;
+  padding-top: 2px;
+  white-space: nowrap;
+}
+
+.tl-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #4b83ff;
+  margin-top: 3px;
+  flex-shrink: 0;
+}
+
+.tl-item.dining .tl-dot {
+  background: #ff9a3d;
+}
+
+.tl-content strong {
+  display: block;
+  font-size: 14px;
+  color: #111729;
+}
+
+.tl-content span {
+  font-size: 12px;
+  color: rgba(29,36,54,.55);
+}
+
+/* 执行结果卡片 */
+.execution-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-top: 14px;
+  border-radius: 18px;
+  padding: 16px;
+  background: rgba(86,203,182,.14);
+  border: 1px solid rgba(86,203,182,.28);
+}
+
+.execution-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #56cbb6;
+  color: #fff;
+  font-size: 18px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.execution-card strong {
+  display: block;
+  color: #1a6b5e;
+  font-size: 15px;
+}
+
+.execution-card p {
+  margin: 4px 0 0;
+  color: rgba(22,80,70,.76);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* loading 步骤提示 */
+.loading-steps {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 12px 16px;
+  border-radius: 14px;
   background: rgba(255,255,255,.42);
+  font-size: 13px;
+  color: rgba(29,36,54,.52);
+}
+
+.loading-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4b83ff;
+  animation: pulse 1.2s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+.loading-steps .step {
+  color: rgba(29,36,54,.38);
+  transition: color .3s ease, font-weight .3s ease;
+}
+
+.loading-steps .step.active {
+  color: #2f6fde;
+  font-weight: 700;
+}
+
+.step-arrow {
+  color: rgba(29,36,54,.28);
 }
 
 .choice-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin: 10px 0;
+  margin: 4px 0;
 }
 
 .choice-row button.selected {
-  background: rgba(74, 118, 255, .18);
+  background: rgba(74, 118, 255, .22);
   color: #245ed9;
+  font-weight: 700;
 }
 
 .clarify-box input,
@@ -1364,33 +1685,6 @@ button:disabled {
   border-radius: 999px;
   padding: 0 14px;
   background: rgba(255,255,255,.48);
-}
-
-.plan-results article {
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) 86px;
-  gap: 12px;
-  align-items: center;
-}
-
-.plan-results article > button:first-child {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: #315df4;
-  color: #fff;
-  font-weight: 900;
-}
-
-.plan-results article.selected {
-  outline: 2px solid rgba(74, 118, 255, .28);
-}
-
-.plan-results p,
-.plan-results span {
-  display: block;
-  margin: 4px 0 0;
-  color: rgba(29,36,54,.72);
 }
 
 .feedback-line {
@@ -1409,20 +1703,11 @@ button:disabled {
   box-shadow: 0 12px 24px rgba(75, 105, 238, .24);
 }
 
-.execution-line,
 .error-line {
   margin: 14px 0 0;
   border-radius: 16px;
   padding: 12px 14px;
   line-height: 1.6;
-}
-
-.execution-line {
-  background: rgba(86,203,182,.16);
-  color: #216d61;
-}
-
-.error-line {
   background: rgba(255, 106, 106, .14);
   color: #a33145;
 }
@@ -1430,26 +1715,27 @@ button:disabled {
 .composer {
   position: fixed;
   z-index: 20;
-  left: 44px;
-  right: 44px;
-  bottom: 102px;
-  min-height: 116px;
+  left: var(--page-edge);
+  right: var(--page-edge);
+  bottom: 96px;
+  min-height: 96px;
   display: grid;
-  grid-template-columns: 112px minmax(240px, 1fr) 84px 84px 84px 96px;
+  grid-template-columns: 88px minmax(240px, 1fr) 72px 72px 72px 92px;
   align-items: center;
-  gap: 20px;
+  gap: 16px;
   border-radius: 28px;
-  padding: 18px 34px;
+  padding: 14px 28px;
+  max-width: calc(100vw - var(--page-edge) * 2);
 }
 
 .footer-orbit {
-  width: 68px;
-  height: 68px;
+  width: 58px;
+  height: 58px;
   justify-self: center;
 }
 
 .command-input {
-  height: 84px;
+  height: 64px;
   display: flex;
   align-items: center;
   border-radius: 42px;
@@ -1464,12 +1750,12 @@ button:disabled {
 }
 
 .command-input input {
-  font-size: 22px;
+  font-size: clamp(17px, 1.05vw, 21px);
 }
 
 .composer > button:not(.brand-orbit):not(.primary-button) {
-  width: 68px;
-  height: 68px;
+  width: 58px;
+  height: 58px;
   border-radius: 50%;
   background: rgba(255,255,255,.46);
   color: #1e4a88;
@@ -1492,7 +1778,7 @@ button:disabled {
 .tool-popover {
   position: absolute;
   right: 130px;
-  bottom: 98px;
+  bottom: 82px;
   display: grid;
   gap: 8px;
   width: 160px;
@@ -1512,21 +1798,22 @@ button:disabled {
 .dock {
   position: fixed;
   z-index: 19;
-  left: 44px;
-  right: 44px;
+  left: var(--page-edge);
+  right: var(--page-edge);
   bottom: 26px;
-  min-height: 78px;
+  min-height: 64px;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   align-items: center;
   border-radius: 24px;
   padding: 10px 80px;
+  max-width: calc(100vw - var(--page-edge) * 2);
 }
 
 .dock button {
   justify-self: center;
-  min-width: 170px;
-  min-height: 52px;
+  min-width: min(170px, 80%);
+  min-height: 44px;
   border-radius: 999px;
   background: transparent;
   color: #3f485c;
@@ -1567,12 +1854,285 @@ button:disabled {
   transform: scale(.97);
 }
 
-@media (max-width: 1280px) {
+@media (min-width: 981px) {
   .instant-app {
+    --page-edge: clamp(24px, 2vw, 40px);
+    --bottom-safe: 28px;
+    display: grid;
+    grid-template-columns: minmax(300px, 360px) minmax(560px, 1fr) minmax(300px, 360px);
+    grid-template-areas:
+      "topbar topbar topbar"
+      "status map insight"
+      "toolbar map filters"
+      "legend map mini"
+      "drawer drawer drawer"
+      "composer composer composer"
+      "dock dock dock";
+    align-items: start;
+    gap: 18px;
+    min-height: 100vh;
     overflow: auto;
-    padding: 14px 18px 230px;
+    overflow-x: hidden;
+    padding: 14px var(--page-edge) var(--bottom-safe);
   }
 
+  .topbar {
+    grid-area: topbar;
+  }
+
+  .status-card,
+  .insight-card,
+  .toolbar,
+  .legend-card,
+  .time-filter,
+  .mini-map,
+  .planner-drawer,
+  .composer,
+  .dock {
+    position: relative;
+    inset: auto;
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+  }
+
+  .status-card {
+    grid-area: status;
+  }
+
+  .insight-card {
+    grid-area: insight;
+  }
+
+  .toolbar {
+    grid-area: toolbar;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .toolbar button {
+    min-height: 40px;
+    font-size: 24px;
+  }
+
+  .legend-card {
+    grid-area: legend;
+    display: block;
+  }
+
+  .star-map {
+    grid-area: map;
+    width: 100%;
+    max-width: 920px;
+    height: clamp(520px, calc(100vh - 310px), 640px);
+    min-height: 520px;
+    margin: 0 auto;
+    overflow: hidden;
+    border-radius: 30px;
+    transform: none;
+  }
+
+  .star-map.compact {
+    transform: none;
+  }
+
+  .star-map .tag-dot,
+  .star-map .more-dot {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(4px);
+  }
+
+  .planet-node:hover .tag-dot,
+  .planet-node:hover .more-dot,
+  .planet-node.active .tag-dot,
+  .planet-node.active .more-dot {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+
+  .time-filter {
+    grid-area: filters;
+    display: flex;
+    justify-content: space-around;
+    gap: 8px;
+    padding: 12px 10px;
+  }
+
+  .time-filter button {
+    min-width: 42px;
+    font-size: 14px;
+    white-space: nowrap;
+  }
+
+  .mini-map {
+    grid-area: mini;
+    height: 132px;
+  }
+
+  .planner-drawer {
+    grid-area: drawer;
+    max-height: none;
+  }
+
+  .drawer-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .composer {
+    grid-area: composer;
+    grid-template-columns: 72px minmax(260px, 1fr) 64px 64px 64px 92px;
+    min-height: 84px;
+    padding: 14px 22px;
+  }
+
+  .dock {
+    grid-area: dock;
+    min-height: 64px;
+    padding: 10px 40px;
+  }
+}
+
+@media (min-width: 981px) and (max-width: 1560px) {
+  .instant-app {
+    --page-edge: 30px;
+    --bottom-safe: 28px;
+    display: grid;
+    grid-template-columns: minmax(260px, 290px) minmax(600px, 1fr) minmax(260px, 290px);
+    grid-template-areas:
+      "topbar topbar topbar"
+      "status map insight"
+      "toolbar map filters"
+      "legend map mini"
+      "drawer drawer drawer"
+      "composer composer composer"
+      "dock dock dock";
+    align-items: start;
+    gap: 14px;
+    overflow: auto;
+    overflow-x: hidden;
+    padding: 14px var(--page-edge) var(--bottom-safe);
+  }
+
+  .topbar {
+    grid-area: topbar;
+  }
+
+  .legend-card {
+    display: block;
+  }
+
+  .status-card,
+  .insight-card,
+  .toolbar,
+  .time-filter,
+  .mini-map,
+  .planner-drawer {
+    position: relative;
+    inset: auto;
+    width: 100%;
+    margin: 0;
+  }
+
+  .status-card {
+    grid-area: status;
+  }
+
+  .insight-card {
+    grid-area: insight;
+  }
+
+  .toolbar {
+    grid-area: toolbar;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 8px;
+    padding: 10px;
+  }
+
+  .toolbar button {
+    font-size: 24px;
+  }
+
+  .time-filter {
+    grid-area: filters;
+    display: flex;
+    justify-content: space-around;
+    gap: 8px;
+    padding: 12px 10px;
+  }
+
+  .time-filter button {
+    min-width: 42px;
+    font-size: 14px;
+    white-space: nowrap;
+  }
+
+  .star-map {
+    grid-area: map;
+    width: 100%;
+    max-width: 900px;
+    height: clamp(470px, calc(100vh - 330px), 560px);
+    margin: 0 auto;
+    transform-origin: 50% 48%;
+    overflow: hidden;
+    border-radius: 28px;
+  }
+
+  .planner-drawer {
+    grid-area: drawer;
+    max-height: none;
+  }
+
+  .drawer-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .mini-card {
+    min-height: auto;
+  }
+
+  .mini-map {
+    grid-area: mini;
+    height: 132px;
+  }
+
+  .composer {
+    grid-area: composer;
+    position: relative;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    width: 100%;
+    grid-template-columns: 64px minmax(0, 1fr) repeat(3, 58px) 84px;
+    min-height: 76px;
+    padding: 10px 14px;
+  }
+
+  .command-input {
+    height: 56px;
+  }
+
+  .dock {
+    grid-area: dock;
+    position: relative;
+    left: auto;
+    right: auto;
+    bottom: auto;
+    width: 100%;
+    min-height: 56px;
+    padding: 8px 10px;
+  }
+
+  .dock button {
+    min-height: 40px;
+  }
+}
+
+@media (max-width: 980px) {
   .topbar {
     grid-template-columns: 1fr;
   }
@@ -1586,62 +2146,55 @@ button:disabled {
     justify-content: space-between;
   }
 
-  .status-card,
-  .insight-card,
-  .toolbar,
-  .legend-card,
-  .time-filter,
-  .mini-map,
-  .planner-drawer {
-    position: relative;
-    inset: auto;
-    width: auto;
-    margin: 18px 0 0;
-  }
-
-  .toolbar {
-    grid-template-columns: repeat(5, 1fr);
-    width: auto;
-  }
-
-  .legend-card,
-  .insight-card,
-  .status-card,
-  .planner-drawer {
-    border-radius: 22px;
-  }
-
-  .star-map {
-    width: 100%;
-    height: 680px;
-    margin-top: 24px;
-  }
-
-  .time-filter {
-    display: flex;
-    justify-content: space-around;
-  }
-
-  .mini-map {
-    height: 120px;
+  .instant-app {
+    --page-edge: 18px;
+    --bottom-safe: 20px;
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "topbar"
+      "status"
+      "toolbar"
+      "map"
+      "insight"
+      "drawer"
+      "filters"
+      "mini"
+      "composer"
+      "dock";
+    gap: 16px;
   }
 
   .composer {
-    grid-template-columns: 70px minmax(0, 1fr) repeat(4, 72px);
-    left: 18px;
-    right: 18px;
-    bottom: 108px;
-    padding: 14px;
-  }
-
-  .dock {
-    left: 18px;
-    right: 18px;
-    padding: 10px;
+    left: var(--page-edge);
+    right: var(--page-edge);
   }
 }
 
 @media (max-width: 760px) {
+  .instant-app {
+    --bottom-safe: 18px;
+    display: block;
+    padding-top: 16px;
+  }
+
+  .status-card,
+  .toolbar,
+  .star-map,
+  .insight-card,
+  .planner-drawer,
+  .time-filter,
+  .mini-map,
+  .composer,
+  .dock {
+    width: 100%;
+    max-width: 100%;
+    margin-top: 16px;
+  }
+
+  .topbar {
+    gap: 12px;
+  }
+
   .brand strong {
     font-size: 26px;
   }
@@ -1656,6 +2209,10 @@ button:disabled {
     padding: 0 20px;
   }
 
+  .meta {
+    font-size: 15px;
+  }
+
   .search-pill input,
   .command-input input {
     font-size: 16px;
@@ -1663,42 +2220,76 @@ button:disabled {
 
   .status-card {
     padding: 20px;
+    overflow: hidden;
   }
 
-  .progress-list li {
-    grid-template-columns: 24px 94px minmax(0, 1fr) 44px;
-    gap: 8px;
+  .card-title {
+    align-items: flex-start;
+  }
+
+  .card-title span {
+    display: none;
+  }
+
+  .status-card h1 {
+    font-size: 28px;
+  }
+
+  .status-card p {
     font-size: 14px;
   }
 
+  .progress-list li {
+    grid-template-columns: 18px minmax(76px, 88px) minmax(0, 1fr);
+    gap: 7px;
+    font-size: 12px;
+  }
+
+  .progress-list em {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .progress-list strong {
+    display: none;
+  }
+
   .star-map {
-    min-height: 620px;
-    transform: scale(.78);
-    transform-origin: 50% 40%;
-    margin-left: -10%;
-    width: 120%;
+    width: 100%;
+    height: 500px;
+    transform: none;
+    transform-origin: 50% 50%;
+    margin: 0;
   }
 
   .planet-center {
-    width: 136px;
-    height: 136px;
-    margin: -68px 0 0 -68px;
+    width: 118px;
+    height: 118px;
   }
 
   .planet-node,
   .planet-node .planet {
-    width: 112px;
-    height: 112px;
+    width: 92px;
+    height: 92px;
   }
 
-  .planet-node {
-    margin: -56px 0 0 -56px;
+  .planet-node .planet span {
+    font-size: 18px;
   }
 
   .tag-dot {
-    min-width: 72px;
-    min-height: 34px;
-    font-size: 12px;
+    min-width: 54px;
+    min-height: 30px;
+    padding: 0 7px;
+    font-size: 10px;
+  }
+
+  .more-dot {
+    width: 38px;
+    min-width: 38px;
+    min-height: 30px;
+    right: -30px;
   }
 
   .drawer-grid,
@@ -1710,8 +2301,10 @@ button:disabled {
 
   .composer {
     grid-template-columns: 1fr 1fr 1fr;
-    bottom: 104px;
     gap: 10px;
+    min-height: 0;
+    border-radius: 22px;
+    padding: 12px;
   }
 
   .footer-orbit,
@@ -1733,6 +2326,7 @@ button:disabled {
 
   .dock {
     grid-template-columns: repeat(4, 1fr);
+    min-height: 64px;
   }
 
   .dock button {
@@ -1746,6 +2340,11 @@ button:disabled {
     margin: 0 0 2px;
     font-size: 20px;
   }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: .4; transform: scale(.7); }
 }
 
 @keyframes drift {
