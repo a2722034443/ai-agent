@@ -76,9 +76,11 @@ public class ExternalClientProperties {
         private String apiKey = "";
         private String baseUrl = "https://token-plan-cn.xiaomimimo.com/v1";
         private String model = "mimo-v2.5-pro";
-        private int maxTokens = 4096;
+        private int maxTokens = 1024;
         private double temperature = 0.1;
-        private int timeoutMs = 30000;
+        private int timeoutMs = 3000;
+        private String routerMode = "primary-fallback";
+        private final Endpoint secondary = new Endpoint();
 
         public boolean isEnabled() { return enabled; }
         public void setEnabled(boolean enabled) { this.enabled = enabled; }
@@ -94,6 +96,31 @@ public class ExternalClientProperties {
         public void setMaxTokens(int maxTokens) { this.maxTokens = maxTokens; }
         public double getTemperature() { return temperature; }
         public void setTemperature(double temperature) { this.temperature = temperature; }
+        public int getTimeoutMs() { return timeoutMs; }
+        public void setTimeoutMs(int timeoutMs) { this.timeoutMs = timeoutMs; }
+        public String getRouterMode() { return routerMode; }
+        public void setRouterMode(String routerMode) { this.routerMode = routerMode; }
+        public Endpoint getSecondary() { return secondary; }
+    }
+
+    public static class Endpoint {
+        private boolean enabled = true;
+        private String apiKey = "";
+        private String baseUrl = "";
+        private String model = "";
+        private int maxTokens = 1024;
+        private int timeoutMs = 4000;
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public String getApiKey() { return apiKey; }
+        public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+        public String getBaseUrl() { return baseUrl; }
+        public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
+        public String getModel() { return model; }
+        public void setModel(String model) { this.model = model; }
+        public int getMaxTokens() { return maxTokens; }
+        public void setMaxTokens(int maxTokens) { this.maxTokens = maxTokens; }
         public int getTimeoutMs() { return timeoutMs; }
         public void setTimeoutMs(int timeoutMs) { this.timeoutMs = timeoutMs; }
     }

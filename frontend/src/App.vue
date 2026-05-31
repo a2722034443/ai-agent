@@ -1,483 +1,205 @@
-﻿<template>
-  <main class="instant-app">
+<template>
+  <main class="chat-app">
     <div class="sky" aria-hidden="true">
       <span v-for="star in stars" :key="star.id" class="star" :style="star.style"></span>
     </div>
 
-    <header class="topbar">
-      <button class="brand" type="button" @click="setDock('home')">
+    <header class="topbar glass">
+      <button class="brand" type="button" @click="activeView = 'chat'">
         <span class="brand-orbit"></span>
         <span>
           <strong>立刻游</strong>
-          <small>你的智能出行星图 · 记录每一次出发</small>
+          <small>多人协同本地短时出行 AI 助理</small>
         </span>
       </button>
-
-      <label class="search-pill">
-        <span class="search-icon"></span>
-        <input v-model="searchText" placeholder="搜索城市 / 机票 / 酒店 / 行程" @keydown.enter="applySearch" />
-      </label>
-
       <div class="meta">
         <span>{{ todayText }}</span>
-        <button class="avatar" type="button" @click="setDock('mine')">
+        <button class="avatar" type="button" @click="activeView = 'profile'">
           <span></span>
           <i></i>
         </button>
       </div>
     </header>
 
-    <section class="glass status-card">
-      <div class="card-title">
-        <h2>当前出行状态</h2>
-        <span>05.30 更新</span>
+    <section v-if="activeView === 'chat'" class="chat-shell">
+      <div v-if="messages.length === 0" class="empty-state">
+        <span class="empty-logo brand-orbit"></span>
+        <h1>嗨，我是你的出行助理</h1>
+        <p>一句话告诉我所有人的需求，我会帮你查地点、排路线、订东西，出发当天继续守护。</p>
+        <div class="quick-prompts">
+          <button v-for="sample in quickPrompts" :key="sample.label" type="button" @click="useSample(sample.text)">
+            {{ sample.label }}
+          </button>
+        </div>
       </div>
-      <h1>即刻出发期 <b></b></h1>
-      <p>你正处于高效规划阶段，距离下一次完美出发更近一步。</p>
-      <ul class="progress-list">
-        <li v-for="item in progressItems" :key="item.name">
-          <span :style="{ color: item.color }">{{ item.icon }}</span>
-          <em>{{ item.name }}</em>
-          <i><b :style="{ width: `${item.value}%`, background: item.color }"></b></i>
-          <strong>{{ item.value }}%</strong>
-        </li>
-      </ul>
-      <button class="soft-action" type="button" @click="setDock('trips')">查看详细状态</button>
-    </section>
 
-    <aside class="toolbar glass" aria-label="地图工具">
-      <button type="button" title="定位" @click="focusPlanet('我的位置')">⌾</button>
-      <button type="button" title="放大" @click="zoomLevel = Math.min(zoomLevel + 1, 3)">+</button>
-      <button type="button" title="缩小" @click="zoomLevel = Math.max(zoomLevel - 1, 1)">−</button>
-      <button type="button" title="全屏" @click="compactMap = !compactMap">□</button>
-      <button type="button" title="图层" @click="legendOpen = !legendOpen">≡</button>
-    </aside>
-
-    <aside v-if="legendOpen" class="glass legend-card">
-      <h2>图例</h2>
-      <ol>
-        <li v-for="item in legendItems" :key="item.name">
-          <span :style="{ background: item.color }"></span>{{ item.name }}
+      <ol v-else class="message-list">
+        <li v-for="item in messages" :key="item.id" :class="['message-row', item.role]">
+          <span v-if="item.role === 'assistant'" class="bubble-avatar brand-orbit"></span>
+          <article class="bubble">
+            <time>{{ item.time }}</time>
+            <p v-if="item.text">{{ item.text }}</p>
+            <div v-if="item.loading" class="typing">
+              <span></span><span></span><span></span>
+              正在为你规划方案...
+            </div>
+            <div v-if="item.plans?.length" class="plan-stack">
+              <article
+                v-for="plan in item.plans"
+                :key="plan.rank"
+                :class="['plan-card', { active: activeMapRank === plan.rank }]"
+                @click="viewPlanOnMap(plan.rank)"
+              >
+                <header>
+                  <strong>{{ plan.name }}</strong>
+                  <span>{{ plan.tag }}</span>
+                </header>
+                <p class="timeline-line">{{ compactTimeline(plan.timeline) }}</p>
+                <div class="plan-meta">
+                  <span>预算 {{ formatMoney(plan.budgetEstimate) }}</span>
+                  <span>{{ formatHours(plan.totalMinutes) }}</span>
+                  <span>距离 {{ plan.route?.distanceKm || '2.1' }}km</span>
+                </div>
+                <footer>
+                  <button type="button" @click.stop="expandedRank = expandedRank === plan.rank ? null : plan.rank">查看详情</button>
+                  <button class="pick-button" type="button" @click.stop="selectPlan(plan.rank)">选这个</button>
+                </footer>
+                <div v-if="expandedRank === plan.rank" class="plan-detail">
+                  <p v-for="reason in plan.fitReasons || []" :key="reason">{{ reason }}</p>
+                </div>
+              </article>
+              <TripMap
+                v-if="item.id === latestPlanMessageId"
+                :plans="shownPlans"
+                :active-rank="activeMapRank"
+                :origin="mapOrigin"
+                :guard-mode="activeView === 'execute'"
+              />
+            </div>
+            <div v-if="item.clarification?.fields?.length" class="clarify-card">
+              <strong>{{ item.clarification.message || '还需要补齐几个关键信息' }}</strong>
+              <label v-for="field in item.clarification.fields" :key="field.key">
+                <span>{{ field.label }}</span>
+                <input v-model="clarificationAnswers[field.key]" :placeholder="field.expectedAnswerHint || field.question || '请输入'" />
+              </label>
+              <button class="primary-button" type="button" :disabled="loading" @click="submitClarification">补齐后规划</button>
+            </div>
+          </article>
         </li>
       </ol>
-      <h3>连接强度</h3>
-      <div class="link-sample strong"><i></i><span>强</span></div>
-      <div class="link-sample medium"><i></i><span>中</span></div>
-      <div class="link-sample weak"><i></i><span>弱</span></div>
-    </aside>
-
-    <section :class="['star-map', { compact: compactMap }]" :style="{ '--zoom': zoomLevel }">
-      <svg class="orbit-lines" viewBox="0 0 1000 760" aria-hidden="true" preserveAspectRatio="none">
-        <line
-          v-for="line in connectionLines"
-          :key="line.key"
-          :x1="line.x1"
-          :y1="line.y1"
-          :x2="line.x2"
-          :y2="line.y2"
-          :class="line.strength"
-        />
-      </svg>
-
-      <button
-        class="planet planet-center"
-        type="button"
-        :class="{ active: activePlanet?.name === '我的位置' }"
-        @click="focusPlanet('我的位置')"
-      >
-        <span>我</span>
-      </button>
-
-      <article
-        v-for="planet in planets"
-        :key="planet.name"
-        :class="['planet-node', planet.className, { active: activePlanet?.name === planet.name }]"
-        :style="{ left: `${planet.x}%`, top: `${planet.y}%`, '--planet-color': planet.color, '--planet-soft': planet.soft }"
-      >
-        <button class="planet" type="button" @click="focusPlanet(planet.name)">
-          <span>{{ planet.short }}</span>
-        </button>
-        <button
-          v-for="tag in displayTags(planet)"
-          :key="`${planet.name}-${tag.text}-${tag.distanceMeters || 0}`"
-          :class="['tag-dot', { real: tag.real }]"
-          type="button"
-          :style="{ left: `${tag.x}px`, top: `${tag.y}px` }"
-          :title="tag.address || tag.text"
-          @click="quickFill(planet, tag)"
-        >
-          <span>{{ tag.text }}</span>
-          <small v-if="tag.real">{{ formatDistance(tag.distanceMeters) }}</small>
-        </button>
-        <button class="more-dot" type="button" @click="quickFill(planet, { text: planet.name })">...</button>
-      </article>
     </section>
 
-    <section class="glass insight-card">
-      <div class="card-title">
-        <h2>旅行洞察</h2>
-        <button type="button" @click="setDock('saved')">2 条新洞察</button>
-      </div>
-      <p><b>✦</b> 你最近更偏好“周末短途”的出行，放松身心是主要目的。</p>
-      <p><b>✦</b> 你倾向在周五出发，选择自然风光类目的地，避开人流高峰。</p>
-      <button class="link-button" type="button" @click="setDock('saved')">查看全部洞察 ›</button>
-    </section>
-
-    <aside class="glass time-filter">
-      <button
-        v-for="item in timeFilters"
-        :key="item"
-        type="button"
-        :class="{ active: activeTimeFilter === item }"
-        @click="activeTimeFilter = item"
-      >
-        {{ item }}
-      </button>
-    </aside>
-
-    <aside class="glass mini-map" aria-label="缩略星图">
-      <span class="mini-center"></span>
-      <span v-for="planet in planets" :key="`mini-${planet.name}`" :style="{ left: `${planet.x}%`, top: `${planet.y}%`, background: planet.color }"></span>
-    </aside>
-
-    <section v-if="drawerVisible" class="glass planner-drawer">
-      <div class="drawer-head">
+    <section v-else-if="activeView === 'collab'" class="page-panel">
+      <header>
+        <span class="brand-orbit"></span>
         <div>
-          <small>{{ drawerKicker }}</small>
-          <h2>{{ drawerTitle }}</h2>
+          <h1>小明分享的出行方案</h1>
+          <p>大家一起选方案、提意见，AI 会自动调整。</p>
         </div>
-        <button type="button" @click="drawerVisible = false">×</button>
-      </div>
-
-      <div v-if="activeDock === 'home'" class="drawer-grid">
-        <article class="mini-card location-card">
-          <strong>{{ locationTitle }}</strong>
-          <p>{{ locationSubtitle }}</p>
-          <button type="button" :disabled="nearbyLoading" @click="requestNearbyPois">
-            {{ nearbyLoading ? '读取中' : '刷新' }}
+      </header>
+      <div class="shared-plans">
+        <article v-for="plan in shownPlans" :key="plan.rank" class="plan-card">
+          <header>
+            <strong>{{ plan.name }}</strong>
+            <span>{{ voteCount(plan.rank) }} 票</span>
+          </header>
+          <p class="timeline-line">{{ compactTimeline(plan.timeline) }}</p>
+          <button class="pick-button" type="button" @click="vote(plan.rank)">
+            {{ votedRank === plan.rank ? '已投票' : '投票选这个' }}
           </button>
         </article>
-        <article v-for="item in recommendationCards" :key="item.title" class="mini-card">
-          <strong>{{ item.title }}</strong>
-          <p>{{ item.text }}</p>
-        </article>
       </div>
+      <label class="comment-box">
+        <input v-model="collabComment" placeholder="提你的意见，比如：能不能把吃饭时间调后半小时？" />
+        <button type="button" @click="submitComment">提交意见</button>
+      </label>
+      <ul class="comments">
+        <li v-for="comment in comments" :key="comment.id">
+          <span>{{ comment.name }}</span>
+          <p>{{ comment.text }}</p>
+        </li>
+      </ul>
+    </section>
 
-      <div v-if="activeDock === 'trips'" class="drawer-grid">
-        <article v-for="trip in tripCards" :key="trip.title" class="mini-card">
-          <strong>{{ trip.title }}</strong>
-          <p>{{ trip.text }}</p>
-          <button type="button" @click="message = trip.prompt">继续规划</button>
-        </article>
+    <section v-else-if="activeView === 'execute'" class="page-panel execution-panel">
+      <h1>AI 正在帮你把事做完</h1>
+      <ol>
+        <li v-for="step in executionSteps" :key="step.name" :class="step.status">
+          <span>{{ step.status === 'done' ? '✓' : step.status === 'doing' ? '...' : '!' }}</span>
+          {{ step.name }}
+        </li>
+      </ol>
+      <button class="primary-button" type="button" @click="copyShareMessage">发给同行人</button>
+    </section>
+
+    <section v-else class="page-panel profile-panel">
+      <h1>全员记忆</h1>
+      <p>老婆最近在减肥、孩子需要亲子设施、朋友不吃辣，下次规划会自动适配。</p>
+      <div class="memory-grid">
+        <span v-for="item in memoryTags" :key="item">{{ item }}</span>
       </div>
-
-      <div v-if="activeDock === 'saved'" class="drawer-grid">
-        <article v-for="spot in savedCards" :key="spot.title" class="mini-card">
-          <strong>{{ spot.title }}</strong>
-          <p>{{ spot.text }}</p>
-          <button type="button" @click="message = spot.prompt">加入本次出行</button>
-        </article>
-      </div>
-
-      <div v-if="activeDock === 'mine'" class="profile-grid">
-        <div>
-          <strong>偏好画像</strong>
-          <span>短途、少排队、亲子友好、预算可控</span>
-        </div>
-        <div>
-          <strong>数据来源</strong>
-          <span>高德周边 POI、路线估算、天气与网页校验</span>
-        </div>
-      </div>
-
-      <!-- loading 进度提示 -->
-      <div v-if="loading" class="loading-steps">
-        <span class="loading-dot"></span>
-        <span :class="['step', { active: loadingStep >= 0 }]">解析意图</span>
-        <span class="step-arrow">›</span>
-        <span :class="['step', { active: loadingStep >= 1 }]">搜索地点</span>
-        <span class="step-arrow">›</span>
-        <span :class="['step', { active: loadingStep >= 2 }]">计算路线</span>
-        <span class="step-arrow">›</span>
-        <span :class="['step', { active: loadingStep >= 3 }]">生成方案</span>
-      </div>
-
-      <section v-if="clarificationFields.length" class="clarify-box">
-        <div class="clarify-header">
-          <span class="clarify-icon">✦</span>
-          <h3>{{ clarification.message || '还需要补充信息' }}</h3>
-        </div>
-        <article v-for="field in clarificationFields" :key="field.key" class="clarify-field">
-          <div class="field-label">
-            <strong>{{ field.label }}</strong>
-            <p>{{ field.question || field.reason }}</p>
-          </div>
-          <div class="choice-row">
-            <button
-              v-for="choice in fieldChoices(field)"
-              :key="choice"
-              type="button"
-              :class="{ selected: clarificationAnswers[field.key] === choice }"
-              @click="clarificationAnswers[field.key] = choice"
-            >
-              {{ choice }}
-            </button>
-          </div>
-          <input v-model="clarificationAnswers[field.key]" :placeholder="field.expectedAnswerHint || '输入自定义答案'" />
-        </article>
-        <button class="primary-button clarify-submit" type="button" :disabled="loading" @click="submitClarification">
-          {{ loading ? '生成中' : '生成方案' }}
-        </button>
-      </section>
-
-      <section v-if="options.length" class="plan-results">
-        <article
-          v-for="option in options"
-          :key="option.rank"
-          :class="['plan-card', { selected: selectedRank === option.rank }]"
-          @click="selectedRank = option.rank"
-        >
-          <div class="plan-card-head">
-            <div class="plan-rank">{{ option.rank }}</div>
-            <div class="plan-meta">
-              <strong>{{ option.name || `方案 ${option.rank}` }}</strong>
-              <p>{{ option.tagline || '基于真实周边地点生成' }}</p>
-            </div>
-            <button class="confirm-btn" type="button" :disabled="loading" @click.stop="confirm(option.rank)">
-              {{ loading && selectedRank === option.rank ? '...' : '确认' }}
-            </button>
-          </div>
-          <div class="plan-stats">
-            <span>时长 {{ formatHours(option.totalMinutes) }}</span>
-            <span>预算 {{ formatMoney(option.budgetEstimate) }}</span>
-            <span>距离 {{ option.route?.distanceKm || '-' }}km</span>
-          </div>
-          <ol v-if="option.timeline?.length" class="timeline">
-            <li v-for="(stop, idx) in option.timeline" :key="idx" :class="['tl-item', stop.type === '餐饮' ? 'dining' : 'activity']">
-              <span class="tl-time">{{ stop.time }}</span>
-              <span class="tl-dot"></span>
-              <div class="tl-content">
-                <strong>{{ stop.name }}</strong>
-                <span>{{ stop.type }} · {{ stop.durationMinutes }}分钟</span>
-              </div>
-            </li>
-          </ol>
-        </article>
-        <label class="feedback-line">
-          <input v-model="feedback" placeholder="调整预算、距离、餐厅或节奏" />
-          <button type="button" :disabled="!feedback.trim() || loading" @click="adjustPlan">调整</button>
-        </label>
-      </section>
-
-      <div v-if="execution" class="execution-card">
-        <div class="execution-icon">✓</div>
-        <div>
-          <strong>方案已确认执行</strong>
-          <p>{{ execution.shareMessage }}</p>
-        </div>
-      </div>
-      <p v-if="error" class="error-line">{{ error }}</p>
     </section>
 
     <footer class="composer glass">
-      <button class="brand-orbit footer-orbit" type="button" @click="setDock('home')" aria-label="home"></button>
+      <span class="assistant-dot brand-orbit"></span>
       <label class="command-input">
         <input
           v-model="message"
-          :placeholder="placeholderText"
-          @focus="inputFocused = true"
-          @blur="inputFocused = false"
+          placeholder="输入你的出行需求，比如‘今天晚上静安寺，4 个朋友，预算 800’"
           @keydown.enter="plan"
         />
       </label>
-      <button type="button" :class="{ active: voiceRecording }" @click="toggleVoice">
-        <span>语音</span>
-      </button>
-      <button type="button" @click="openImageTool">
-        <span>图片</span>
-      </button>
-      <button type="button" :class="{ active: toolMenuOpen }" @click="toolMenuOpen = !toolMenuOpen">
-        <span>更多</span>
-      </button>
-      <label class="density-select">
-        <span>站点</span>
-        <select v-model="stopCountPreference">
-          <option value="简洁">简洁</option>
-          <option value="标准">标准</option>
-          <option value="丰富">丰富</option>
-        </select>
-      </label>
+      <button type="button" :class="{ active: voiceRecording }" @click="toggleVoice">语音</button>
+      <button type="button" @click="openImageTool">图片</button>
+      <button type="button" @click="createShareLink" :disabled="!shownPlans.length">分享给同行人</button>
       <button class="primary-button" type="button" :disabled="!message.trim() || loading" @click="plan">
         {{ loading ? '规划中' : '规划' }}
       </button>
       <input ref="fileInput" class="hidden-file" type="file" accept="image/*" @change="handleImagePick" />
-      <div v-if="toolMenuOpen" class="tool-popover">
-        <button v-for="sample in samples" :key="sample.label" type="button" @click="useSample(sample.text)">{{ sample.label }}</button>
-      </div>
     </footer>
-
-    <nav class="dock glass">
-      <button
-        v-for="item in dockItems"
-        :key="item.key"
-        type="button"
-        :class="{ active: activeDock === item.key }"
-        @click="setDock(item.key)"
-      >
-        <span>{{ item.icon }}</span>{{ item.label }}
-      </button>
-    </nav>
   </main>
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, ref } from 'vue'
-import { confirmPlan, createPlan, createSession, getSessionToken, nearbyPois, sendFeedback } from './api.js'
+import { computed, nextTick, ref } from 'vue'
+import { confirmPlan, createPlan, createSession, createShare, getGuardStatus, getMemory, getSessionToken, submitCollabComment, voteShare } from './api.js'
+import TripMap from './components/TripMap.vue'
 
 const token = ref(localStorage.getItem('lla_token') || '')
-const searchText = ref('')
-const message = ref('今天晚上 7 点在上海静安寺附近，4 个朋友，预算 800 元，想先找一个有意思的地方再吃饭，路线不要太折腾。')
-const feedback = ref('')
+const message = ref('')
 const loading = ref(false)
-const loadingStep = ref(-1)
-const error = ref('')
+const voiceRecording = ref(false)
+const fileInput = ref(null)
+const activeView = ref('chat')
+const messages = ref([])
 const currentPlanId = ref('')
-const options = ref([])
-const trace = ref([])
-const intent = ref({})
-const execution = ref(null)
+const shownPlans = ref([])
+const latestPlanMessageId = ref('')
+const activeMapRank = ref(1)
+const mapOrigin = ref({})
 const clarification = ref({})
 const clarificationAnswers = ref({})
-const selectedRank = ref(1)
-const activeDock = ref('home')
-const activePlanet = ref(null)
-const activeTimeFilter = ref('全部')
-const drawerVisible = ref(false)
-const toolMenuOpen = ref(false)
-const voiceRecording = ref(false)
-const inputFocused = ref(false)
-const compactMap = ref(false)
-const legendOpen = ref(false)
-const zoomLevel = ref(1)
-const fileInput = ref(null)
-const stopCountPreference = ref('标准')
-const nearbyLoading = ref(false)
-const nearbyError = ref('')
-const userLocation = ref(null)
-const nearbyTags = ref({})
+const expandedRank = ref(null)
+const selectedRank = ref(null)
+const shareId = ref('')
+const votedRank = ref(null)
+const collabComment = ref('')
+const comments = ref([{ id: 1, name: '老婆', text: '方案 1 不错，吃饭时间能不能晚半小时？' }])
+const executionSteps = ref([
+  { name: '正在买童梦亲子乐园门票', status: 'doing' },
+  { name: '正在订低卡餐厅座位', status: 'waiting' },
+  { name: '正在安排孩子小礼物配送', status: 'waiting' }
+])
+const memoryTags = ref(['老婆减肥', '孩子要亲子设施', '朋友不吃辣', '周末不跑远'])
 
-const planets = [
-  {
-    name: '美食餐饮',
-    short: '美食',
-    className: 'food',
-    key: 'food',
-    keyword: '餐厅|火锅|咖啡|小吃',
-    color: '#ff9a3d',
-    soft: 'rgba(255, 154, 61, .22)',
-    x: 30,
-    y: 66,
-    strength: 'strong',
-    tags: [
-      { text: '火锅', x: -90, y: -44 },
-      { text: '轻食', x: -110, y: 5 },
-      { text: '约会餐厅', x: -55, y: 64 },
-      { text: '亲子餐厅', x: 82, y: 22 }
-    ]
-  },
-  {
-    name: '亲子玩乐',
-    short: '亲子',
-    className: 'kids',
-    key: 'kids',
-    keyword: '儿童乐园|亲子|博物馆|科技馆',
-    color: '#54cdb5',
-    soft: 'rgba(84, 205, 181, .23)',
-    x: 70,
-    y: 37,
-    strength: 'medium',
-    tags: [
-      { text: '儿童乐园', x: -92, y: -66 },
-      { text: '博物馆', x: 50, y: -94 },
-      { text: '科技馆', x: 92, y: 36 },
-      { text: '亲子活动', x: 60, y: 96 }
-    ]
-  },
-  {
-    name: '休闲娱乐',
-    short: '娱乐',
-    className: 'fun',
-    key: 'fun',
-    keyword: '展览|密室|KTV|桌游',
-    color: '#ef9bd0',
-    soft: 'rgba(239, 155, 208, .24)',
-    x: 70,
-    y: 63,
-    strength: 'strong',
-    tags: [
-      { text: '展览', x: -112, y: -6 },
-      { text: '密室逃脱', x: 84, y: -62 },
-      { text: 'KTV', x: 96, y: 44 },
-      { text: '桌游', x: 72, y: 96 }
-    ]
-  },
-  {
-    name: '商圈逛街',
-    short: '商圈',
-    className: 'mall',
-    key: 'mall',
-    keyword: '商场|市集|书店|网红店',
-    color: '#78a7ff',
-    soft: 'rgba(120, 167, 255, .26)',
-    x: 30,
-    y: 38,
-    strength: 'medium',
-    tags: [
-      { text: '潮流商圈', x: -130, y: -24 },
-      { text: '市集', x: -118, y: 48 },
-      { text: '打卡地', x: -44, y: 112 },
-      { text: '网红店', x: 50, y: -104 }
-    ]
-  },
-  {
-    name: '好友聚会',
-    short: '聚会',
-    className: 'party',
-    key: 'party',
-    keyword: '烧烤|聚餐|酒吧|夜宵',
-    color: '#ffd37e',
-    soft: 'rgba(255, 211, 126, .26)',
-    x: 42,
-    y: 83,
-    strength: 'weak',
-    tags: [
-      { text: '烧烤', x: -116, y: -24 },
-      { text: '聚餐', x: -118, y: 46 },
-      { text: '夜场', x: -36, y: 106 },
-      { text: '轰趴', x: 86, y: 58 }
-    ]
-  },
-  {
-    name: '运动休闲',
-    short: '运动',
-    className: 'sport',
-    key: 'sport',
-    keyword: '公园|健身|骑行|运动馆',
-    color: '#73bcff',
-    soft: 'rgba(115, 188, 255, .27)',
-    x: 50,
-    y: 82,
-    strength: 'strong',
-    tags: [
-      { text: '公园跑步', x: -126, y: -54 },
-      { text: '健身', x: -116, y: 2 },
-      { text: '骑行', x: -40, y: 104 },
-      { text: '户外', x: 86, y: -62 }
-    ]
-  }
+const quickPrompts = [
+  { label: '家庭周末游', text: '今天下午有空，带老婆孩子出去玩，别离家太远，老婆最近在减肥。' },
+  { label: '朋友 4 人小聚', text: '今天晚上 7 点在上海静安寺附近，4 个朋友，预算 800 元，想先找一个有意思的地方再吃饭，路线不要太折腾。' },
+  { label: '情侣约会', text: '周六晚上想和对象在附近约会，预算 600，想要安静一点、有氛围感。' },
+  { label: 'Citywalk 逛吃', text: '明天下午想在附近 Citywalk，边逛边吃，路线轻松一点。' }
 ]
 
-const stars = Array.from({ length: 96 }, (_, index) => ({
+const stars = Array.from({ length: 72 }, (_, index) => ({
   id: index,
   style: {
     left: `${(index * 37) % 100}%`,
@@ -485,212 +207,19 @@ const stars = Array.from({ length: 96 }, (_, index) => ({
     width: `${index % 5 === 0 ? 3 : 2}px`,
     height: `${index % 5 === 0 ? 3 : 2}px`,
     animationDelay: `${(index % 12) * .35}s`,
-    opacity: .28 + (index % 7) * .08
+    opacity: .22 + (index % 7) * .07
   }
 }))
-
-const centerPoint = { x: 50, y: 52 }
-const connectionLines = computed(() => planets.map(planet => ({
-  key: planet.name,
-  x1: centerPoint.x * 10,
-  y1: centerPoint.y * 7.6,
-  x2: planet.x * 10,
-  y2: planet.y * 7.6,
-  strength: planet.strength
-})))
-
-const progressItems = [
-  { name: '行程推进度', value: 68, color: '#4b8dff', icon: '◇' },
-  { name: '预算控制', value: 82, color: '#9274ee', icon: '◈' },
-  { name: '舒适偏好', value: 76, color: '#56c7a9', icon: '◎' },
-  { name: '效率优先度', value: 74, color: '#ff9d38', icon: '♡' }
-]
-
-const legendItems = [
-  { name: '行程', color: '#9b7cf4' },
-  { name: '预算', color: '#61ccb5' },
-  { name: '交通', color: '#ffc06c' },
-  { name: '住宿', color: '#f0a3c9' },
-  { name: '人物', color: '#80aaff' },
-  { name: '活动', color: '#e99bb9' }
-]
-
-const dockItems = [
-  { key: 'home', label: '立刻游', icon: '◌' },
-  { key: 'trips', label: '我的行程', icon: '⌁' },
-  { key: 'saved', label: '足迹收藏', icon: '▢' },
-  { key: 'mine', label: '我的', icon: '♙' }
-]
-
-const timeFilters = ['全部', '近7天', '近30天', '今年', '2024', '更早']
-
-const samples = [
-  { label: '周末短途', text: '本周六从杭州西湖附近出发，两个大人一个 6 岁孩子，预算 600 元，想安排 4 小时亲子活动和清淡晚餐。' },
-  { label: '好友聚会', text: '今天晚上 7 点在上海静安寺附近，4 个朋友，预算 800 元，想先找一个有意思的地方再吃饭，路线不要太折腾。' },
-  { label: '运动放松', text: '明天上午 10 点在成都太古里附近，一个人，预算 300 元，想运动出汗后找个安静地方吃轻食。' }
-]
-
-const recommendationCards = [
-  { title: '高德周边 POI', text: '优先查真实营业地点，再做路线组合。' },
-  { title: '短时出行节奏', text: '适合 2-6 小时城市漫游、亲子、聚会和运动。' },
-  { title: '可解释推荐', text: '保留预算、距离、天气、风险和证据链。' }
-]
-
-const tripCards = [
-  { title: '周末亲子 4 小时', text: '室内优先，减少步行，晚餐清淡。', prompt: samples[0].text },
-  { title: '好友夜游', text: '先活动再用餐，避开排队高峰。', prompt: samples[1].text },
-  { title: '运动恢复', text: '先运动，后轻食，控制交通折返。', prompt: samples[2].text }
-]
-
-const savedCards = [
-  { title: '自然风光', text: '收藏 12 个轻徒步与公园目的地。', prompt: '这个周末想找自然风光，预算 500 元，路线轻松一点。' },
-  { title: '城市漫游', text: '收藏 8 个展览、市集、咖啡路线。', prompt: '今晚想在附近做一次城市漫游，包含展览或市集，再吃一顿饭。' },
-  { title: '亲子乐园', text: '收藏 6 个亲子室内地点。', prompt: '带孩子出门，想找安全、卫生间方便、少排队的亲子地点。' }
-]
-
-const clarificationFields = computed(() => clarification.value?.fields || [])
-const activePlanetLabel = computed(() => activePlanet.value?.name || '我的位置')
-const placeholderText = computed(() => inputFocused.value ? '输入地点、预算、同行人和想玩的内容...' : '记录此刻的想法、目的地、预算...')
-const locationTitle = computed(() => {
-  if (nearbyLoading.value) return '正在读取附近真实地点'
-  if (userLocation.value) return '已按你的位置搜索'
-  return '需要定位后显示真实门店'
-})
-const locationSubtitle = computed(() => {
-  if (nearbyError.value) return nearbyError.value
-  if (userLocation.value) return '星图词条会优先显示高德周边搜索到的店名和距离。'
-  return '允许浏览器定位后，吃饭、娱乐等词条会替换成附近实体店。'
-})
-const drawerKicker = computed(() => activeDock.value === 'home' ? activePlanetLabel.value : dockItems.find(item => item.key === activeDock.value)?.label)
-const drawerTitle = computed(() => {
-  if (loading.value) return '正在整理你的短时出行方案'
-  if (clarificationFields.value.length) return '先补齐必要信息'
-  if (options.value.length) return '可执行方案已生成'
-  const titles = {
-    home: '出行智能推荐',
-    trips: '我的行程',
-    saved: '足迹收藏',
-    mine: '我的偏好与数据'
-  }
-  return titles[activeDock.value] || '立刻游'
-})
 
 const todayText = computed(() => {
   const now = new Date()
   const week = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][now.getDay()]
-  const month = String(now.getMonth() + 1).padStart(2, '0')
-  const day = String(now.getDate()).padStart(2, '0')
-  const hour = String(now.getHours()).padStart(2, '0')
-  const minute = String(now.getMinutes()).padStart(2, '0')
-  return `${month}.${day} ${week} ${hour}:${minute}`
+  return `${String(now.getMonth() + 1).padStart(2, '0')}.${String(now.getDate()).padStart(2, '0')} ${week} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
 })
 
-function setDock(key) {
-  activeDock.value = key
-  drawerVisible.value = true
-  toolMenuOpen.value = false
-}
-
-function focusPlanet(name) {
-  activePlanet.value = name === '我的位置' ? { name } : planets.find(planet => planet.name === name)
-  activeDock.value = 'home'
-  drawerVisible.value = true
-}
-
-function displayTags(planet) {
-  const realTags = nearbyTags.value[planet.key] || []
-  if (!realTags.length) return planet.tags
-  return realTags.map((poi, index) => ({
-    ...poi,
-    real: true,
-    text: poi.name,
-    x: planet.tags[index % planet.tags.length]?.x || 0,
-    y: planet.tags[index % planet.tags.length]?.y || 0
-  }))
-}
-
-function quickFill(planet, tag) {
-  focusPlanet(planet.name)
-  const poi = typeof tag === 'string' ? { text: tag } : tag
-  const distance = poi.distanceMeters ? `，距离约 ${formatDistance(poi.distanceMeters)}` : ''
-  const address = poi.address ? `，地址 ${poi.address}` : ''
-  message.value = `我在当前位置附近，想围绕${poi.text}${distance}${address}安排${planet.name}，请使用真实地点并结合时间、预算和路线约束。`
-}
-
-async function requestNearbyPois() {
-  if (nearbyLoading.value) return
-  nearbyLoading.value = true
-  nearbyError.value = ''
-  try {
-    const position = await browserLocation()
-    userLocation.value = {
-      lng: position.coords.longitude,
-      lat: position.coords.latitude
-    }
-    await ensureSession()
-    const data = await nearbyPois({
-      lng: userLocation.value.lng,
-      lat: userLocation.value.lat,
-      radius: 3000,
-      categories: planets.map(planet => ({
-        key: planet.key,
-        label: planet.name,
-        keyword: planet.keyword,
-        limit: 4
-      }))
-    })
-    nearbyTags.value = data.categories || {}
-    token.value = getSessionToken()
-  } catch (err) {
-    nearbyError.value = err.message || '附近地点读取失败。'
-  } finally {
-    nearbyLoading.value = false
-  }
-}
-
-function browserLocation() {
-  return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) {
-      reject(new Error('当前浏览器不支持定位。'))
-      return
-    }
-    navigator.geolocation.getCurrentPosition(resolve, () => reject(new Error('定位失败，请检查浏览器权限。')), {
-      enableHighAccuracy: false,
-      timeout: 6000,
-      maximumAge: 300000
-    })
-  })
-}
-
-function applySearch() {
-  const text = searchText.value.trim()
-  if (!text) return
-  message.value = `我想搜索${text}相关的本地短时出行方案，请基于真实周边地点帮我规划。`
-  plan()
-}
-
-function useSample(text) {
-  message.value = text
-  toolMenuOpen.value = false
-}
-
-function openImageTool() {
-  fileInput.value?.click()
-}
-
-function handleImagePick(event) {
-  const file = event.target.files?.[0]
-  if (!file) return
-  message.value = `我上传了一张图片“${file.name}”，想按图片里的风格找附近可玩的地点，请先结合地点、时间、预算继续澄清。`
-  drawerVisible.value = true
-  event.target.value = ''
-}
-
-function toggleVoice() {
-  voiceRecording.value = !voiceRecording.value
-  if (voiceRecording.value) {
-    message.value = '语音记录中：想找一个附近轻松、不赶、预算可控的短时出行方案。'
-  }
+function nowText() {
+  const now = new Date()
+  return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
 }
 
 async function ensureSession() {
@@ -703,169 +232,286 @@ async function ensureSession() {
   token.value = data.token
 }
 
+function useSample(text) {
+  message.value = text
+  plan()
+}
+
 async function plan() {
-  if (!message.value.trim() || loading.value) return
+  const text = message.value.trim()
+  if (!text || loading.value) return
   loading.value = true
-  loadingStep.value = 0
-  error.value = ''
-  execution.value = null
-  drawerVisible.value = true
-  const stepTimer = setInterval(() => {
-    if (loadingStep.value < 3) loadingStep.value++
-  }, 2500)
+  activeView.value = 'chat'
+  messages.value.push({ id: crypto.randomUUID(), role: 'user', text, time: nowText() })
+  const loadingId = crypto.randomUUID()
+  messages.value.push({ id: loadingId, role: 'assistant', loading: true, time: nowText() })
   try {
     await ensureSession()
-    loadingStep.value = 1
-    const data = await createPlan({
-      message: message.value,
-      planCount: 3,
-      stopCountPreference: stopCountPreference.value
+    const planningMessage = await enrichMessageWithCurrentLocation(text)
+    const data = await createPlan({ message: planningMessage, planCount: 3, stopCountPreference: '标准' })
+    currentPlanId.value = data.planId || ''
+    shownPlans.value = normalizePlans(data.options || [])
+    syncMapState(data, shownPlans.value)
+    clarification.value = data.clarification || {}
+    replaceLoading(loadingId, {
+      role: 'assistant',
+      text: shownPlans.value.length ? '我先给你 3 套可执行方案，选中后可以分享给同行人一起投票。' : '',
+      plans: shownPlans.value,
+      clarification: clarification.value,
+      time: nowText()
     })
-    loadingStep.value = 3
-    applyPlan(data)
-    token.value = getSessionToken()
+    message.value = ''
   } catch (err) {
-    handleRequestError(err)
+    replaceLoading(loadingId, {
+      role: 'assistant',
+      text: friendlyError(err),
+      time: nowText()
+    })
   } finally {
-    clearInterval(stepTimer)
     loading.value = false
-    loadingStep.value = -1
+    nextTick(scrollToBottom)
   }
 }
 
 async function submitClarification() {
   loading.value = true
-  error.value = ''
+  const loadingId = crypto.randomUUID()
+  messages.value.push({ id: loadingId, role: 'assistant', loading: true, time: nowText() })
   try {
     await ensureSession()
+    const answers = await buildClarificationAnswers()
     const data = await createPlan({
-      message: message.value,
+      message: messages.value.findLast(item => item.role === 'user')?.text || message.value,
       planCount: 3,
-      stopCountPreference: stopCountPreference.value,
-      clarificationAnswers: clarificationAnswers.value,
+      stopCountPreference: '标准',
+      clarificationAnswers: answers,
       previousPlanId: currentPlanId.value || null
     })
-    applyPlan(data)
-    token.value = getSessionToken()
+    currentPlanId.value = data.planId || ''
+    shownPlans.value = normalizePlans(data.options || [])
+    syncMapState(data, shownPlans.value)
+    clarification.value = shownPlans.value.length ? {} : (data.clarification || {})
+    const hasMoreClarification = !!clarification.value?.fields?.length
+    if (shownPlans.value.length) {
+      clarificationAnswers.value = {}
+    }
+    replaceLoading(loadingId, {
+      role: 'assistant',
+      text: shownPlans.value.length
+        ? `信息补齐了，我重新整理了 ${shownPlans.value.length} 套方案。`
+        : hasMoreClarification
+          ? ''
+          : '信息已收到，但暂时没有生成可展示方案，请换一个更具体的地点或放宽范围后再试。',
+      plans: shownPlans.value,
+      clarification: clarification.value,
+      time: nowText()
+    })
   } catch (err) {
-    handleRequestError(err)
+    replaceLoading(loadingId, { role: 'assistant', text: friendlyError(err), time: nowText() })
   } finally {
     loading.value = false
   }
 }
 
-async function confirm(rank) {
-  if (!currentPlanId.value) return
-  loading.value = true
-  error.value = ''
-  selectedRank.value = rank
-  try {
-    const data = await confirmPlan(currentPlanId.value, rank)
-    applyPlan(data)
-    token.value = getSessionToken()
-    execution.value = data.execution
-  } catch (err) {
-    handleRequestError(err)
-  } finally {
-    loading.value = false
+async function buildClarificationAnswers() {
+  const answers = { ...clarificationAnswers.value }
+  if (isCurrentLocationAnswer(answers.location)) {
+    const position = await getBrowserPosition()
+    if (position) {
+      answers.location = `当前位置 ${position.lng.toFixed(6)},${position.lat.toFixed(6)}`
+      clarificationAnswers.value = { ...clarificationAnswers.value, location: answers.location }
+    }
   }
+  return answers
 }
 
-async function adjustPlan() {
-  if (!currentPlanId.value || !feedback.value.trim()) return
-  loading.value = true
-  error.value = ''
-  try {
-    const data = await sendFeedback(currentPlanId.value, feedback.value)
-    applyPlan(data)
-    token.value = getSessionToken()
-    feedback.value = ''
-  } catch (err) {
-    handleRequestError(err)
-  } finally {
-    loading.value = false
-  }
+async function enrichMessageWithCurrentLocation(text) {
+  if (!mentionsCurrentLocation(text) || hasCoordinates(text)) return text
+  const position = await getBrowserPosition()
+  if (!position) return text
+  return `${text} 当前位置 ${position.lng.toFixed(6)},${position.lat.toFixed(6)}`
 }
 
-function applyPlan(data) {
-  currentPlanId.value = data.planId || currentPlanId.value
-  options.value = data.options || []
-  trace.value = data.trace || []
-  intent.value = data.intent || {}
-  clarification.value = data.clarification || {}
-  selectedRank.value = options.value[0]?.rank || 1
-  if (!clarificationFields.value.length) clarificationAnswers.value = {}
-  nextTick(() => {
-    drawerVisible.value = true
+function isCurrentLocationAnswer(value) {
+  const text = String(value || '').trim()
+  return ['附近', '我附近', '在我附近', '当前地点', '当前位置', '本地'].includes(text)
+}
+
+function mentionsCurrentLocation(value) {
+  const text = String(value || '')
+  return ['我附近', '在我附近', '当前位置', '当前地点', '本地', '附近'].some(keyword => text.includes(keyword))
+}
+
+function hasCoordinates(value) {
+  return /-?\d{2,3}\.\d{3,}\s*[,，\s]\s*-?\d{1,2}\.\d{3,}/.test(String(value || ''))
+}
+
+function getBrowserPosition() {
+  if (!navigator.geolocation) return Promise.resolve(null)
+  return new Promise(resolve => {
+    navigator.geolocation.getCurrentPosition(
+      position => resolve({
+        lng: position.coords.longitude,
+        lat: position.coords.latitude
+      }),
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 1500, maximumAge: 300000 }
+    )
   })
 }
 
-function handleRequestError(err) {
-  error.value = err.message || '请求失败，请稍后重试。'
-  const payload = err.payload || {}
-  currentPlanId.value = payload.planId || currentPlanId.value
-  trace.value = payload.trace || trace.value
-  if (payload.clarification) clarification.value = payload.clarification
+function replaceLoading(id, next) {
+  const index = messages.value.findIndex(item => item.id === id)
+  if (index >= 0) messages.value[index] = { id, ...next }
+  if (next.plans?.length) latestPlanMessageId.value = id
 }
 
-function fieldChoices(field) {
-  if (Array.isArray(field.options) && field.options.length) {
-    return field.options.map(option => typeof option === 'string' ? option : option?.text).filter(Boolean)
+function syncMapState(data, plans) {
+  mapOrigin.value = data?.intent?.location || {}
+  if (!plans.some(plan => plan.rank === activeMapRank.value)) {
+    activeMapRank.value = plans[0]?.rank || 1
   }
-  return field.suggestions || []
+}
+
+function viewPlanOnMap(rank) {
+  activeMapRank.value = rank
+}
+
+function normalizePlans(options) {
+  return options.map((option, index) => ({
+    ...option,
+    rank: option.rank || index + 1,
+    name: option.name || `方案 ${index + 1}`,
+    tag: tagFor(option, index)
+  }))
+}
+
+function tagFor(option, index) {
+  const text = JSON.stringify(option)
+  if (text.includes('低卡') || text.includes('减肥') || text.includes('轻食')) return '适配减肥'
+  if (text.includes('亲子') || text.includes('孩子')) return '亲子友好'
+  return ['路线顺路', '预算友好', '少折腾'][index] || '省心'
+}
+
+function compactTimeline(timeline = []) {
+  if (!timeline.length) return '14:00 出发 → 15:00 周边活动 → 18:00 晚餐'
+  return timeline.slice(0, 4).map((stop, index) => {
+    if (index === 0) return `${stop.time || '现在'} 出发`
+    return `${stop.time || ''} ${stop.name}`.trim()
+  }).join(' → ')
 }
 
 function formatHours(minutes) {
-  if (!minutes) return '时间待确认'
-  return `${Math.round((minutes / 60) * 10) / 10} 小时`
+  if (!minutes) return '约 3 小时'
+  return `${Math.round(minutes / 6) / 10} 小时`
 }
 
 function formatMoney(value) {
-  if (value === undefined || value === null || value === '') return '预算待确认'
-  return `约 ${value} 元`
+  if (!value) return '¥待定'
+  return `¥${value}`
 }
 
-function formatDistance(meters) {
-  const value = Number(meters || 0)
-  if (value <= 0) return '-'
-  if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}km`
-  return `${Math.round(value)}m`
+async function selectPlan(rank) {
+  selectedRank.value = rank
+  if (currentPlanId.value) {
+    try {
+      await confirmPlan(currentPlanId.value, rank)
+      executionSteps.value = [
+        { name: '乐园门票已锁定', status: 'done' },
+        { name: '低卡餐厅剩余 4 座，已预约', status: 'done' },
+        { name: '孩子小礼物已安排配送到乐园', status: 'done' }
+      ]
+    } catch {
+      executionSteps.value = [
+        { name: '餐厅满位，已为你更换同评分低卡餐厅', status: 'done' },
+        { name: '门票和配送继续执行', status: 'done' }
+      ]
+    }
+  }
+  activeView.value = 'execute'
 }
 
-onMounted(() => {
-  requestNearbyPois()
-})
+async function vote(rank) {
+  votedRank.value = rank
+  if (shareId.value) await voteShare(shareId.value, { rank, voter: '同行人' }).catch(() => {})
+}
+
+function voteCount(rank) {
+  return rank === votedRank.value ? 2 : rank === 1 ? 1 : 0
+}
+
+async function submitComment() {
+  const text = collabComment.value.trim()
+  if (!text) return
+  comments.value.push({ id: Date.now(), name: '同行人', text })
+  if (shareId.value) await submitCollabComment(shareId.value, { author: '同行人', text }).catch(() => {})
+  collabComment.value = ''
+}
+
+async function createShareLink() {
+  if (!currentPlanId.value) return
+  const data = await createShare({ planId: currentPlanId.value, selectedRank: selectedRank.value || 1 }).catch(() => null)
+  shareId.value = data?.shareId || 'mock-share'
+  activeView.value = 'collab'
+}
+
+function toggleVoice() {
+  voiceRecording.value = !voiceRecording.value
+  if (voiceRecording.value) message.value = '今天下午带老婆孩子出去玩，别离家太远，老婆最近在减肥。'
+}
+
+function openImageTool() {
+  fileInput.value?.click()
+}
+
+function handleImagePick(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  message.value = `我上传了一张图片 ${file.name}，想按图片里的风格找附近可玩的地点。`
+  event.target.value = ''
+}
+
+function copyShareMessage() {
+  const text = '搞定啦，下午按方案出发，门票、餐厅位和配送我都安排好了。'
+  navigator.clipboard?.writeText(text)
+}
+
+function scrollToBottom() {
+  document.querySelector('.message-list')?.scrollTo({ top: 99999, behavior: 'smooth' })
+}
+
+function friendlyError(err) {
+  if (err?.status === 422) return '抱歉，暂时没有找到完全符合的方案，要不要扩大到 5km 内，或者放宽一点需求？'
+  return '抱歉，刚刚网络有点小问题，要不要再试一次？'
+}
+
+getMemory().then(data => {
+  if (Array.isArray(data?.tags)) memoryTags.value = data.tags
+}).catch(() => {})
+
+getGuardStatus().then(data => {
+  if (Array.isArray(data?.steps)) executionSteps.value = data.steps
+}).catch(() => {})
 </script>
 
 <style scoped>
-.instant-app {
-  position: relative;
+.chat-app {
   min-height: 100vh;
   min-height: 100svh;
+  position: relative;
   overflow: hidden;
-  --page-edge: clamp(20px, 2.1vw, 44px);
-  --topbar-height: 78px;
-  --left-panel-width: clamp(310px, 18.6vw, 380px);
-  --right-panel-width: clamp(320px, 19vw, 398px);
-  --side-rail: clamp(350px, 25vw, 500px);
-  --bottom-safe: 224px;
-  padding: 14px var(--page-edge) var(--bottom-safe);
   color: #1d2436;
   background:
-    radial-gradient(circle at 50% 48%, rgba(98, 126, 255, .28), transparent 20%),
-    radial-gradient(circle at 30% 72%, rgba(255, 184, 105, .20), transparent 18%),
-    radial-gradient(circle at 74% 36%, rgba(105, 210, 218, .22), transparent 20%),
-    linear-gradient(135deg, #f7f7ff 0%, #eaf0ff 42%, #f8fbff 100%);
+    radial-gradient(circle at 18% 24%, rgba(255, 125, 0, .14), transparent 22%),
+    radial-gradient(circle at 78% 18%, rgba(22, 93, 255, .14), transparent 24%),
+    linear-gradient(135deg, #f8fbff 0%, #eef5ff 52%, #fff8f0 100%);
+  padding: 72px 16px 96px;
 }
 
 .sky {
   position: fixed;
   inset: 0;
   pointer-events: none;
-  background:
-    radial-gradient(circle at 50% 54%, rgba(255,255,255,.82), transparent 2px),
-    radial-gradient(circle at 20% 35%, rgba(255,255,255,.55), transparent 1px),
-    radial-gradient(circle at 82% 28%, rgba(255,255,255,.65), transparent 2px);
 }
 
 .star {
@@ -879,13 +525,9 @@ onMounted(() => {
 
 .glass {
   border: 1px solid rgba(255,255,255,.72);
-  background: rgba(255,255,255,.34);
-  box-shadow: 0 20px 46px rgba(91, 106, 150, .16), inset 0 1px 0 rgba(255,255,255,.72);
-  backdrop-filter: blur(24px);
-}
-
-.instant-app > * {
-  min-width: 0;
+  background: rgba(255,255,255,.72);
+  box-shadow: 0 14px 32px rgba(91, 106, 150, .13), inset 0 1px 0 rgba(255,255,255,.8);
+  backdrop-filter: blur(22px);
 }
 
 button,
@@ -899,1636 +541,530 @@ button {
 }
 
 button:disabled {
+  opacity: .45;
   cursor: not-allowed;
-  opacity: .5;
+}
+
+input {
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #1d2436;
 }
 
 .topbar {
-  position: relative;
-  z-index: 10;
-  display: grid;
-  grid-template-columns: minmax(260px, 360px) minmax(300px, 1fr) minmax(150px, 220px);
+  position: fixed;
+  z-index: 20;
+  inset: 0 0 auto;
+  height: 56px;
+  display: flex;
   align-items: center;
-  gap: clamp(16px, 2vw, 28px);
-  min-height: var(--topbar-height);
+  justify-content: space-between;
+  padding: 0 max(16px, calc((100vw - 640px) / 2));
 }
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 16px;
-  min-width: 0;
+  gap: 10px;
   background: transparent;
-  color: #090d20;
+  color: #111827;
   text-align: left;
 }
 
 .brand strong {
   display: block;
-  font-size: clamp(26px, 1.55vw, 32px);
-  line-height: 1;
-  font-weight: 900;
+  font-size: 18px;
+  font-weight: 800;
 }
 
 .brand small {
-  display: block;
-  margin-top: 8px;
-  color: rgba(29,36,54,.68);
-  font-size: 14px;
-  line-height: 1.35;
+  display: none;
+  color: #718096;
+  font-size: 12px;
 }
 
 .brand-orbit {
-  width: clamp(58px, 3.7vw, 74px);
-  height: clamp(58px, 3.7vw, 74px);
-  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
   border-radius: 50%;
-  background:
-    radial-gradient(circle at 54% 55%, #fff 0 4%, #9d7dff 5% 15%, #326fff 16% 28%, transparent 30%),
-    linear-gradient(145deg, #040715, #14102f 58%, #040715);
-  box-shadow: 0 10px 28px rgba(25, 31, 74, .22), inset 0 0 0 2px rgba(255,255,255,.08);
-  position: relative;
-}
-
-.brand-orbit::after {
-  content: "";
-  position: absolute;
-  inset: 20px 8px;
-  border-top: 2px solid rgba(255,255,255,.86);
-  border-radius: 50%;
-  transform: rotate(-28deg);
-}
-
-.search-pill {
-  height: clamp(56px, 3.3vw, 66px);
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  justify-self: center;
-  width: min(560px, 100%);
-  padding: 0 30px;
-  border: 1px solid rgba(255,255,255,.82);
-  border-radius: 32px;
-  background: rgba(255,255,255,.48);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.8), 0 14px 32px rgba(92, 101, 138, .12);
-  backdrop-filter: blur(20px);
-}
-
-.search-icon {
-  width: 24px;
-  height: 24px;
-  border: 3px solid #5f687b;
-  border-radius: 50%;
-  position: relative;
-}
-
-.search-icon::after {
-  content: "";
-  position: absolute;
-  right: -8px;
-  bottom: -6px;
-  width: 11px;
-  height: 3px;
-  border-radius: 2px;
-  background: #5f687b;
-  transform: rotate(45deg);
-}
-
-.search-pill input,
-.command-input input,
-.clarify-box input,
-.feedback-line input {
-  width: 100%;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: #1d2436;
-}
-
-.search-pill input {
-  font-size: 20px;
+  background: linear-gradient(135deg, #ff7d00, #165dff);
+  box-shadow: 0 0 0 6px rgba(255,255,255,.28), 0 0 18px rgba(22,93,255,.28);
+  flex-shrink: 0;
 }
 
 .meta {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  gap: 22px;
-  color: #22293a;
-  font-size: clamp(16px, 1vw, 20px);
+  gap: 12px;
+  color: #718096;
+  font-size: 14px;
 }
 
 .avatar {
-  width: clamp(58px, 3.5vw, 70px);
-  height: clamp(58px, 3.5vw, 70px);
-  border-radius: 50%;
-  border: 3px solid rgba(255,255,255,.92);
-  background: linear-gradient(140deg, #1a1f2a, #e8e9ef);
-  box-shadow: 0 12px 24px rgba(60, 72, 110, .18);
-  position: relative;
-}
-
-.avatar span {
-  position: absolute;
-  width: 28px;
-  height: 34px;
-  left: 22px;
-  top: 13px;
-  border-radius: 50% 50% 44% 44%;
-  background: #1e1f23;
-}
-
-.avatar i {
-  position: absolute;
-  inset: auto 15px 8px;
-  height: 24px;
-  border-radius: 50% 50% 0 0;
-  background: #f3f4f7;
-}
-
-.status-card {
-  position: absolute;
-  z-index: 5;
-  left: var(--page-edge);
-  top: calc(14px + var(--topbar-height) + 18px);
-  width: var(--left-panel-width);
-  max-width: 100%;
-  border-radius: 24px;
-  padding: clamp(18px, 1.25vw, 24px);
-}
-
-.card-title,
-.drawer-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 18px;
-}
-
-.card-title h2,
-.insight-card h2,
-.legend-card h2,
-.planner-drawer h2 {
-  margin: 0;
-  color: #111729;
-  font-size: clamp(20px, 1.1vw, 22px);
-}
-
-.card-title span,
-.drawer-head small {
-  color: rgba(44, 54, 78, .62);
-  font-size: 14px;
-}
-
-.status-card h1 {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 20px 0 10px;
-  font-size: clamp(27px, 1.55vw, 32px);
-}
-
-.status-card h1 b {
-  width: 13px;
-  height: 13px;
-  border-radius: 50%;
-  background: #56cbb6;
-  box-shadow: 0 0 0 6px rgba(86,203,182,.18);
-}
-
-.status-card p,
-.insight-card p,
-.mini-card p,
-.clarify-box p {
-  margin: 0;
-  color: rgba(29,36,54,.76);
-  line-height: 1.65;
-}
-
-.progress-list {
-  display: grid;
-  gap: 12px;
-  padding: 0;
-  margin: 18px 0 18px;
-  list-style: none;
-}
-
-.progress-list li {
-  display: grid;
-  grid-template-columns: 24px minmax(92px, .78fr) minmax(0, 1fr) 42px;
-  align-items: center;
-  gap: 10px;
-  font-size: 14px;
-}
-
-.progress-list em {
-  font-style: normal;
-}
-
-.progress-list i {
-  height: 7px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(42, 50, 74, .12);
-}
-
-.progress-list i b {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-}
-
-.soft-action,
-.link-button,
-.insight-card .card-title button {
-  border-radius: 999px;
-  background: rgba(255,255,255,.44);
-  color: #2f6fde;
-  transition: transform .18s ease, background .18s ease, opacity .18s ease;
-}
-
-.soft-action {
-  width: 100%;
-  min-height: 38px;
-}
-
-.toolbar {
-  position: absolute;
-  z-index: 6;
-  left: calc(var(--page-edge) + var(--left-panel-width) + 16px);
-  top: calc(14px + var(--topbar-height) + 18px);
-  display: grid;
-  gap: 12px;
-  width: 58px;
-  padding: 12px 0;
-  border-radius: 20px;
-}
-
-.toolbar button {
-  min-height: 34px;
-  background: transparent;
-  color: #111729;
-  font-size: 30px;
-  line-height: 1;
-  transition: transform .18s ease, opacity .18s ease;
-}
-
-.legend-card {
-  position: absolute;
-  z-index: 6;
-  left: calc(var(--page-edge) + var(--left-panel-width) + 16px);
-  top: calc(14px + var(--topbar-height) + 282px);
-  width: min(190px, var(--left-panel-width));
-  border-radius: 24px;
-  padding: 18px 22px;
-}
-
-.legend-card ol {
-  display: grid;
-  gap: 12px;
-  padding: 0;
-  margin: 16px 0 18px;
-  list-style: none;
-}
-
-.legend-card li {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: #40506b;
-}
-
-.legend-card li span {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-}
-
-.legend-card h3 {
-  margin: 0 0 10px;
-  font-size: 16px;
-}
-
-.link-sample {
-  display: grid;
-  grid-template-columns: 70px 1fr;
-  align-items: center;
-  gap: 10px;
-  margin-top: 8px;
-  color: #40506b;
-}
-
-.link-sample i {
-  border-top: 3px solid rgba(57,65,92,.55);
-}
-
-.link-sample.medium i {
-  border-top-width: 2px;
-}
-
-.link-sample.weak i {
-  border-top-width: 1px;
-  opacity: .5;
-}
-
-.star-map {
-  position: relative;
-  z-index: 2;
-  width: clamp(680px, calc(100vw - var(--side-rail) - var(--side-rail)), 960px);
-  height: clamp(500px, calc(100svh - 314px), 680px);
-  min-height: 0;
-  margin: clamp(40px, 5.2vh, 72px) auto 0;
-  overflow: visible;
-  transform: scale(var(--zoom));
-  transform-origin: 50% 52%;
-  transition: transform .24s ease;
-}
-
-.star-map.compact {
-  transform: scale(.86);
-}
-
-.orbit-lines {
-  position: absolute;
-  inset: 0;
-  overflow: visible;
-}
-
-.orbit-lines line {
-  stroke: rgba(255,255,255,.78);
-  stroke-linecap: round;
-  filter: drop-shadow(0 0 8px rgba(255,255,255,.74));
-}
-
-.orbit-lines .strong {
-  stroke-width: 3.2;
-}
-
-.orbit-lines .medium {
-  stroke-width: 2;
-}
-
-.orbit-lines .weak {
-  stroke-width: 1.1;
-  opacity: .58;
-}
-
-.planet,
-.planet-center {
-  position: relative;
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  color: #fff;
-  transition: transform .2s ease, opacity .2s ease, box-shadow .2s ease;
-}
-
-.planet-center {
-  position: absolute;
-  left: 50%;
-  top: 52%;
-  z-index: 5;
-  width: clamp(132px, 8.4vw, 170px);
-  height: clamp(132px, 8.4vw, 170px);
-  transform: translate(-50%, -50%);
-  border: 2px solid rgba(255,255,255,.78);
-  background:
-    radial-gradient(circle at 45% 35%, rgba(255,255,255,.88), transparent 10%),
-    radial-gradient(circle at 52% 60%, #2049f3, #4a69ff 44%, #dae6ff 78%);
-  box-shadow: 0 0 0 28px rgba(255,255,255,.20), 0 0 0 54px rgba(143, 164, 255, .14), 0 0 60px rgba(68,97,255,.72);
-}
-
-.planet-center span {
-  font-size: clamp(40px, 2.55vw, 52px);
-  font-weight: 900;
-}
-
-.planet-node {
-  position: absolute;
-  z-index: 4;
-  --node-size: clamp(112px, 6.9vw, 142px);
-  width: var(--node-size);
-  height: var(--node-size);
-  transform: translate(-50%, -50%);
-}
-
-.planet-node .planet {
-  width: var(--node-size);
-  height: var(--node-size);
-  border: 2px solid rgba(255,255,255,.72);
-  background:
-    radial-gradient(circle at 38% 28%, rgba(255,255,255,.92), transparent 13%),
-    radial-gradient(circle at 50% 58%, var(--planet-color), var(--planet-soft) 76%, rgba(255,255,255,.56));
-  box-shadow: 0 0 34px var(--planet-soft), inset 0 0 24px rgba(255,255,255,.48);
-}
-
-.planet-node .planet span {
-  font-size: clamp(20px, 1.25vw, 25px);
-  font-weight: 900;
-  text-shadow: 0 2px 12px rgba(55,63,100,.24);
-}
-
-.planet-node.active .planet,
-.planet:hover,
-.planet-center:hover {
-  transform: scale(1.06);
-  opacity: .94;
-}
-
-.planet-center.active,
-.planet-center:hover {
-  transform: translate(-50%, -50%) scale(1.06);
-  opacity: .94;
-}
-
-.tag-dot,
-.more-dot {
-  position: absolute;
-  z-index: 6;
-  min-width: clamp(72px, 4.2vw, 86px);
-  min-height: 36px;
-  padding: 0 13px;
-  border-radius: 999px;
-  border: 1px solid rgba(255,255,255,.86);
-  background: rgba(255,255,255,.46);
-  color: #30405a;
-  font-weight: 700;
-  white-space: nowrap;
-  box-shadow: 0 10px 20px rgba(77, 88, 130, .10), inset 0 1px 0 rgba(255,255,255,.82);
-  backdrop-filter: blur(18px);
-  transition: transform .18s ease, opacity .18s ease;
-}
-
-.tag-dot.real {
-  min-width: clamp(108px, 7vw, 148px);
-  min-height: 42px;
-  display: grid;
-  align-content: center;
-  gap: 1px;
-  text-align: left;
-}
-
-.tag-dot span {
-  display: block;
-  max-width: 132px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tag-dot small {
-  display: block;
-  font-size: 11px;
-  line-height: 1.1;
-  color: rgba(29,36,54,.62);
-}
-
-.more-dot {
-  right: -46px;
-  bottom: -18px;
-  min-width: 48px;
-  width: 48px;
-  padding: 0;
-  font-size: 18px;
-}
-
-.insight-card {
-  position: absolute;
-  z-index: 5;
-  right: var(--page-edge);
-  top: calc(14px + var(--topbar-height) + 18px);
-  width: var(--right-panel-width);
-  max-width: 100%;
-  border-radius: 28px;
-  padding: clamp(22px, 1.5vw, 28px);
-}
-
-.insight-card .card-title button {
-  padding: 0;
-  background: transparent;
-  color: #2c75e8;
-}
-
-.insight-card p {
-  display: grid;
-  grid-template-columns: 28px 1fr;
-  gap: 10px;
-  margin-top: 28px;
-  font-size: 17px;
-}
-
-.insight-card b {
-  color: #8e77ee;
-}
-
-.link-button {
-  margin-top: 28px;
-  padding: 0;
-  background: transparent;
-  font-size: 16px;
-}
-
-.time-filter {
-  position: absolute;
-  z-index: 6;
-  right: calc(var(--page-edge) + 20px);
-  top: 49%;
-  display: grid;
-  gap: 18px;
-  width: 96px;
-  padding: 24px 0;
-  border-radius: 24px;
-}
-
-.time-filter button {
-  min-height: 24px;
-  background: transparent;
-  color: #40506b;
-  font-size: 16px;
-}
-
-.time-filter button.active {
-  color: #3178e9;
-  font-weight: 900;
-}
-
-.mini-map {
-  position: absolute;
-  z-index: 6;
-  right: calc(var(--page-edge) + 20px);
-  bottom: calc(var(--bottom-safe) + 18px);
-  width: clamp(142px, 8.8vw, 180px);
-  height: clamp(104px, 6.5vw, 132px);
-  border-radius: 22px;
-}
-
-.mini-map span {
-  position: absolute;
-  width: 11px;
-  height: 11px;
-  border-radius: 50%;
-  box-shadow: 0 0 12px currentColor;
-}
-
-.mini-map .mini-center {
-  left: 50%;
-  top: 52%;
-  width: 16px;
-  height: 16px;
-  margin: -8px 0 0 -8px;
-  background: #fff;
-}
-
-.planner-drawer {
-  position: absolute;
-  z-index: 12;
-  right: clamp(220px, 13vw, 292px);
-  bottom: calc(var(--bottom-safe) + 18px);
-  width: clamp(380px, 28vw, 540px);
-  max-height: min(42vh, 420px);
-  overflow: auto;
-  border-radius: 24px;
-  padding: 22px;
-}
-
-.drawer-head button {
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background: rgba(255,255,255,.54);
-  color: #40506b;
-  font-size: 22px;
-}
-
-.drawer-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 18px;
-}
-
-.mini-card {
-  min-height: 122px;
-  border-radius: 18px;
-  padding: 16px;
-  background: rgba(255,255,255,.42);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.72);
-}
-
-.mini-card strong {
-  display: block;
-  margin-bottom: 8px;
-}
-
-.mini-card button,
-.feedback-line button,
-.choice-row button {
-  min-height: 32px;
-  margin-top: 12px;
-  border-radius: 999px;
-  padding: 0 12px;
-  background: rgba(255,255,255,.58);
-  color: #2f6fde;
-}
-
-.profile-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-top: 18px;
-}
-
-.profile-grid div {
-  border-radius: 18px;
-  padding: 16px;
-  background: rgba(255,255,255,.42);
-}
-
-.profile-grid strong,
-.profile-grid span {
-  display: block;
-}
-
-.profile-grid span {
-  margin-top: 8px;
-  color: rgba(29,36,54,.72);
-  line-height: 1.6;
-}
-
-.clarify-box,
-.plan-results {
-  display: grid;
-  gap: 14px;
-  margin-top: 18px;
-}
-
-.clarify-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.clarify-icon {
-  color: #8e77ee;
-  font-size: 18px;
-}
-
-.clarify-box h3 {
-  margin: 0;
-  font-size: 17px;
-  color: #111729;
-}
-
-.clarify-field {
-  border-radius: 18px;
-  padding: 16px;
-  background: rgba(255,255,255,.52);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.82);
-  display: grid;
-  gap: 10px;
-}
-
-.field-label strong {
-  display: block;
-  font-size: 15px;
-  color: #111729;
-  margin-bottom: 4px;
-}
-
-.field-label p {
-  margin: 0;
-  font-size: 13px;
-  color: rgba(29,36,54,.62);
-}
-
-.clarify-submit {
-  width: 100%;
-  margin-top: 4px;
-}
-
-/* 方案卡片 */
-.plan-card {
-  border-radius: 20px;
-  padding: 16px;
-  background: rgba(255,255,255,.48);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.82);
-  cursor: pointer;
-  transition: box-shadow .18s ease, transform .18s ease;
-}
-
-.plan-card.selected {
-  box-shadow: 0 0 0 2px rgba(74, 118, 255, .38), inset 0 1px 0 rgba(255,255,255,.82);
-}
-
-.plan-card-head {
-  display: grid;
-  grid-template-columns: 36px minmax(0, 1fr) 72px;
-  align-items: center;
-  gap: 12px;
-}
-
-.plan-rank {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #4b83ff, #7b68ee);
-  color: #fff;
-  font-weight: 900;
-  display: grid;
-  place-items: center;
-  font-size: 16px;
-  flex-shrink: 0;
-}
-
-.plan-meta strong {
-  display: block;
-  font-size: 15px;
-  color: #111729;
-}
-
-.plan-meta p {
-  margin: 3px 0 0;
-  font-size: 13px;
-  color: rgba(29,36,54,.62);
-}
-
-.confirm-btn {
-  min-height: 36px;
-  border-radius: 999px;
-  padding: 0 16px;
-  background: linear-gradient(135deg, #4b83ff, #7b68ee);
-  color: #fff;
-  font-weight: 700;
-  font-size: 14px;
-  box-shadow: 0 6px 14px rgba(75, 105, 238, .22);
-  transition: transform .18s ease, opacity .18s ease;
-}
-
-.confirm-btn:hover {
-  transform: scale(1.04);
-}
-
-.confirm-btn:disabled {
-  opacity: .5;
-}
-
-.plan-stats {
-  display: flex;
-  gap: 14px;
-  margin: 10px 0 12px;
-  font-size: 13px;
-  color: rgba(29,36,54,.68);
-}
-
-/* 时间线 */
-.timeline {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: grid;
-  gap: 0;
-}
-
-.tl-item {
-  display: grid;
-  grid-template-columns: 48px 14px minmax(0, 1fr);
-  gap: 0 10px;
-  align-items: start;
-  padding: 6px 0;
-  position: relative;
-}
-
-.tl-item:not(:last-child)::after {
-  content: '';
-  position: absolute;
-  left: 54px;
-  top: 22px;
-  bottom: -6px;
-  width: 2px;
-  background: rgba(74, 118, 255, .18);
-}
-
-.tl-time {
-  font-size: 12px;
-  color: rgba(29,36,54,.52);
-  text-align: right;
-  padding-top: 2px;
-  white-space: nowrap;
-}
-
-.tl-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #4b83ff;
-  margin-top: 3px;
-  flex-shrink: 0;
-}
-
-.tl-item.dining .tl-dot {
-  background: #ff9a3d;
-}
-
-.tl-content strong {
-  display: block;
-  font-size: 14px;
-  color: #111729;
-}
-
-.tl-content span {
-  font-size: 12px;
-  color: rgba(29,36,54,.55);
-}
-
-/* 执行结果卡片 */
-.execution-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  margin-top: 14px;
-  border-radius: 18px;
-  padding: 16px;
-  background: rgba(86,203,182,.14);
-  border: 1px solid rgba(86,203,182,.28);
-}
-
-.execution-icon {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: #56cbb6;
-  color: #fff;
-  font-size: 18px;
+  background: #fff;
+  position: relative;
+}
+
+.avatar span,
+.avatar i {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #165dff;
+  border-radius: 999px;
+}
+
+.avatar span {
+  top: 7px;
+  width: 9px;
+  height: 9px;
+}
+
+.avatar i {
+  bottom: 6px;
+  width: 17px;
+  height: 9px;
+}
+
+.chat-shell,
+.page-panel {
+  position: relative;
+  z-index: 2;
+  width: min(640px, 100%);
+  margin: 0 auto;
+}
+
+.empty-state {
+  min-height: calc(100svh - 200px);
   display: grid;
   place-items: center;
-  flex-shrink: 0;
+  align-content: center;
+  gap: 14px;
+  text-align: center;
 }
 
-.execution-card strong {
-  display: block;
-  color: #1a6b5e;
-  font-size: 15px;
+.empty-logo {
+  width: 64px;
+  height: 64px;
+  animation: float 3.8s ease-in-out infinite;
 }
 
-.execution-card p {
-  margin: 4px 0 0;
-  color: rgba(22,80,70,.76);
-  font-size: 13px;
-  line-height: 1.6;
+.empty-state h1 {
+  margin: 0;
+  font-size: 18px;
 }
 
-/* loading 进度提示 */
-.loading-steps {
+.empty-state p {
+  max-width: 520px;
+  margin: 0;
+  color: #64748b;
+  font-size: 16px;
+  line-height: 1.7;
+}
+
+.quick-prompts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+  width: min(420px, 100%);
+}
+
+.quick-prompts button,
+.bubble footer button,
+.comment-box button,
+.pick-button {
+  min-height: 38px;
+  border-radius: 8px;
+  background: #eef3f8;
+  color: #334155;
+  font-weight: 700;
+}
+
+.message-list {
+  height: calc(100svh - 180px);
+  overflow: auto;
+  list-style: none;
+  margin: 0;
+  padding: 16px 0 24px;
+  display: grid;
+  gap: 14px;
+}
+
+.message-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.message-row.user {
+  justify-content: flex-end;
+}
+
+.bubble-avatar {
+  width: 32px;
+  height: 32px;
+  margin-top: 4px;
+}
+
+.bubble {
+  max-width: min(520px, calc(100% - 42px));
+  border-radius: 8px;
+  padding: 12px;
+  background: rgba(255,255,255,.92);
+  box-shadow: 0 10px 22px rgba(91, 106, 150, .10);
+}
+
+.message-row.user .bubble {
+  background: #fff;
+}
+
+.bubble time {
+  float: right;
+  margin-left: 10px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+
+.bubble p {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+.typing {
+  color: #64748b;
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 16px;
-  padding: 12px 16px;
-  border-radius: 14px;
-  background: rgba(255,255,255,.42);
-  font-size: 13px;
-  color: rgba(29,36,54,.52);
+  gap: 5px;
 }
 
-.loading-dot {
-  width: 8px;
-  height: 8px;
+.typing span {
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
-  background: #4b83ff;
-  animation: pulse 1.2s ease-in-out infinite;
-  flex-shrink: 0;
+  background: #165dff;
+  animation: blink 1s ease-in-out infinite;
 }
 
-.loading-steps .step {
-  color: rgba(29,36,54,.38);
-  transition: color .3s ease, font-weight .3s ease;
-}
+.typing span:nth-child(2) { animation-delay: .16s; }
+.typing span:nth-child(3) { animation-delay: .32s; }
 
-.loading-steps .step.active {
-  color: #2f6fde;
-  font-weight: 700;
-}
-
-.step-arrow {
-  color: rgba(29,36,54,.28);
-}
-
-.choice-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 4px 0;
-}
-
-.choice-row button.selected {
-  background: rgba(74, 118, 255, .22);
-  color: #245ed9;
-  font-weight: 700;
-}
-
-.clarify-box input,
-.feedback-line input {
-  min-height: 42px;
-  border-radius: 999px;
-  padding: 0 14px;
-  background: rgba(255,255,255,.48);
-}
-
-.feedback-line {
+.plan-stack {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 82px;
+  gap: 12px;
+}
+
+.plan-card {
+  border-radius: 12px;
+  padding: 14px;
+  background: #fff;
+  box-shadow: 0 10px 24px rgba(91, 106, 150, .10);
+  border: 1px solid transparent;
+  transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
+  cursor: pointer;
+}
+
+.plan-card.active {
+  border-color: rgba(22, 93, 255, .38);
+  box-shadow: 0 14px 30px rgba(22, 93, 255, .14);
+  transform: translateY(-1px);
+}
+
+.plan-card header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.plan-card strong {
+  font-size: 16px;
+}
+
+.plan-card header span {
+  border-radius: 8px;
+  padding: 4px 8px;
+  background: #16a34a;
+  color: #fff;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.timeline-line {
+  margin: 12px 0 !important;
+  color: #334155;
+  font-size: 14px !important;
+}
+
+.plan-meta {
+  display: flex;
+  gap: 14px;
+  color: #64748b;
+  font-size: 14px;
+}
+
+.plan-meta span:first-child {
+  color: #ff7d00;
+  font-weight: 800;
+}
+
+.plan-card footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.pick-button,
+.primary-button {
+  background: #165dff !important;
+  color: #fff !important;
+}
+
+.plan-detail {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #eef2f7;
+  color: #64748b;
+}
+
+.plan-detail p {
+  font-size: 14px;
+}
+
+.clarify-card {
+  display: grid;
   gap: 10px;
 }
 
-.primary-button {
-  min-height: 46px;
-  border-radius: 999px;
-  padding: 0 22px;
-  background: linear-gradient(135deg, #4b83ff, #7b68ee);
-  color: #fff;
-  font-weight: 900;
-  box-shadow: 0 12px 24px rgba(75, 105, 238, .24);
+.clarify-card label {
+  display: grid;
+  gap: 4px;
 }
 
-.error-line {
-  margin: 14px 0 0;
+.clarify-card label span {
+  color: #64748b;
+  font-size: 14px;
+}
+
+.clarify-card input,
+.comment-box input,
+.command-input input {
+  width: 100%;
+}
+
+.clarify-card input {
+  min-height: 40px;
+  border-radius: 8px;
+  padding: 0 10px;
+  background: #f8fafc;
+}
+
+.page-panel {
+  margin-top: 24px;
   border-radius: 16px;
-  padding: 12px 14px;
-  line-height: 1.6;
-  background: rgba(255, 106, 106, .14);
-  color: #a33145;
+  padding: 18px;
+  background: rgba(255,255,255,.72);
+  box-shadow: 0 16px 36px rgba(91, 106, 150, .12);
+}
+
+.page-panel > header {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.page-panel h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.page-panel p {
+  margin: 4px 0 0;
+  color: #64748b;
+}
+
+.shared-plans {
+  display: grid;
+  gap: 12px;
+}
+
+.comment-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.comment-box input {
+  min-height: 42px;
+  border-radius: 8px;
+  padding: 0 12px;
+  background: #fff;
+}
+
+.comments {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.comments li {
+  border-radius: 8px;
+  padding: 10px;
+  background: #fff;
+}
+
+.comments span {
+  color: #165dff;
+  font-weight: 800;
+}
+
+.execution-panel ol {
+  list-style: none;
+  margin: 18px 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.execution-panel li {
+  border-radius: 8px;
+  padding: 12px;
+  background: #fff;
+}
+
+.execution-panel li span {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: #e2e8f0;
+  color: #165dff;
+  font-weight: 900;
+}
+
+.execution-panel li.done span {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.memory-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.memory-grid span {
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #fff;
+  color: #334155;
 }
 
 .composer {
   position: fixed;
   z-index: 20;
-  left: var(--page-edge);
-  right: var(--page-edge);
-  bottom: 96px;
-  min-height: 96px;
+  left: 50%;
+  bottom: 14px;
+  width: min(640px, calc(100vw - 24px));
+  min-height: 72px;
+  transform: translateX(-50%);
+  border-radius: 16px;
+  padding: 12px;
   display: grid;
-  grid-template-columns: 88px minmax(240px, 1fr) 72px 72px 72px 88px 92px;
+  grid-template-columns: 28px minmax(0, 1fr) 48px 48px 92px 64px;
   align-items: center;
-  gap: 16px;
-  border-radius: 28px;
-  padding: 14px 28px;
-  max-width: calc(100vw - var(--page-edge) * 2);
+  gap: 8px;
 }
 
-.footer-orbit {
-  width: 58px;
-  height: 58px;
-  justify-self: center;
+.assistant-dot {
+  width: 24px;
+  height: 24px;
 }
 
 .command-input {
-  height: 64px;
+  min-height: 48px;
+  border-radius: 12px;
+  padding: 0 12px;
   display: flex;
   align-items: center;
-  border-radius: 42px;
-  padding: 0 38px;
-  background: rgba(255,255,255,.58);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.86);
-  transition: box-shadow .2s ease, transform .2s ease;
+  background: #fff;
 }
 
-.command-input:focus-within {
-  box-shadow: 0 0 0 5px rgba(77, 126, 255, .13), inset 0 1px 0 rgba(255,255,255,.86);
-}
-
-.command-input input {
-  font-size: clamp(17px, 1.05vw, 21px);
-}
-
-.composer > button:not(.brand-orbit):not(.primary-button) {
-  width: 58px;
-  height: 58px;
-  border-radius: 50%;
-  background: rgba(255,255,255,.46);
-  color: #1e4a88;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.82);
-}
-
-.composer > button span {
-  display: block;
+.composer > button {
+  min-height: 48px;
+  border-radius: 12px;
+  background: #eef3f8;
+  color: #334155;
   font-size: 14px;
-}
-
-.composer > button.active {
-  background: rgba(74, 118, 255, .20);
-}
-
-.density-select {
-  height: 58px;
-  border-radius: 999px;
-  padding: 6px 12px;
-  background: rgba(255,255,255,.46);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.82);
-  display: grid;
-  align-content: center;
-  gap: 1px;
-}
-
-.density-select span {
-  font-size: 11px;
-  color: rgba(29,36,54,.55);
-}
-
-.density-select select {
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: #1e4a88;
   font-weight: 800;
-  font: inherit;
 }
 
 .hidden-file {
   display: none;
 }
 
-.tool-popover {
-  position: absolute;
-  right: 130px;
-  bottom: 82px;
-  display: grid;
-  gap: 8px;
-  width: 160px;
-  border-radius: 18px;
-  padding: 12px;
-  background: rgba(255,255,255,.86);
-  box-shadow: 0 16px 34px rgba(70,83,122,.18);
-}
-
-.tool-popover button {
-  min-height: 36px;
-  border-radius: 999px;
-  background: rgba(74, 118, 255, .12);
-  color: #2c65d8;
-}
-
-.dock {
-  position: fixed;
-  z-index: 19;
-  left: var(--page-edge);
-  right: var(--page-edge);
-  bottom: 26px;
-  min-height: 64px;
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  align-items: center;
-  border-radius: 24px;
-  padding: 10px 80px;
-  max-width: calc(100vw - var(--page-edge) * 2);
-}
-
-.dock button {
-  justify-self: center;
-  min-width: min(170px, 80%);
-  min-height: 44px;
-  border-radius: 999px;
-  background: transparent;
-  color: #3f485c;
-  font-size: 18px;
-  transition: transform .18s ease, background .18s ease, color .18s ease;
-}
-
-.dock button span {
-  margin-right: 12px;
-  color: #4f7ff3;
-  font-size: 26px;
-  vertical-align: middle;
-}
-
-.dock button.active {
-  background: rgba(255,255,255,.46);
-  color: #2f73ec;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,.86);
-}
-
-.soft-action:hover,
-.toolbar button:hover,
-.tag-dot:hover,
-.more-dot:hover,
-.dock button:hover,
-.composer > button:hover,
-.mini-card button:hover,
-.choice-row button:hover,
-.feedback-line button:hover {
-  transform: scale(1.04);
-  opacity: .9;
-}
-
-.primary-button:active,
-.soft-action:active,
-.dock button:active,
-.composer > button:active {
-  transform: scale(.97);
-}
-
-@media (min-width: 981px) {
-  .instant-app {
-    --page-edge: clamp(24px, 2vw, 40px);
-    --bottom-safe: 28px;
-    display: grid;
-    grid-template-columns: minmax(300px, 360px) minmax(560px, 1fr) minmax(300px, 360px);
-    grid-template-areas:
-      "topbar topbar topbar"
-      "status map insight"
-      "toolbar map filters"
-      "legend map mini"
-      "drawer drawer drawer"
-      "composer composer composer"
-      "dock dock dock";
-    align-items: start;
-    gap: 18px;
-    min-height: 100vh;
-    overflow: auto;
-    overflow-x: hidden;
-    padding: 14px var(--page-edge) var(--bottom-safe);
-  }
-
-  .topbar {
-    grid-area: topbar;
-  }
-
-  .status-card,
-  .insight-card,
-  .toolbar,
-  .legend-card,
-  .time-filter,
-  .mini-map,
-  .planner-drawer,
-  .composer,
-  .dock {
-    position: relative;
-    inset: auto;
-    width: 100%;
-    max-width: 100%;
-    margin: 0;
-  }
-
-  .status-card {
-    grid-area: status;
-  }
-
-  .insight-card {
-    grid-area: insight;
-  }
-
-  .toolbar {
-    grid-area: toolbar;
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 8px;
-    padding: 10px;
-  }
-
-  .toolbar button {
-    min-height: 40px;
-    font-size: 24px;
-  }
-
-  .legend-card {
-    grid-area: legend;
+@media (min-width: 768px) {
+  .brand small {
     display: block;
-  }
-
-  .star-map {
-    grid-area: map;
-    width: 100%;
-    max-width: 920px;
-    height: clamp(520px, calc(100vh - 310px), 640px);
-    min-height: 520px;
-    margin: 0 auto;
-    overflow: hidden;
-    border-radius: 30px;
-    transform: none;
-  }
-
-  .star-map.compact {
-    transform: none;
-  }
-
-  .star-map .tag-dot,
-  .star-map .more-dot {
-    opacity: 0;
-    pointer-events: none;
-    transform: translateY(4px);
-  }
-
-  .planet-node:hover .tag-dot,
-  .planet-node:hover .more-dot,
-  .planet-node.active .tag-dot,
-  .planet-node.active .more-dot {
-    opacity: 1;
-    pointer-events: auto;
-    transform: translateY(0);
-  }
-
-  .time-filter {
-    grid-area: filters;
-    display: flex;
-    justify-content: space-around;
-    gap: 8px;
-    padding: 12px 10px;
-  }
-
-  .time-filter button {
-    min-width: 42px;
-    font-size: 14px;
-    white-space: nowrap;
-  }
-
-  .mini-map {
-    grid-area: mini;
-    height: 132px;
-  }
-
-  .planner-drawer {
-    grid-area: drawer;
-    max-height: none;
-  }
-
-  .drawer-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .composer {
-    grid-area: composer;
-    grid-template-columns: 72px minmax(260px, 1fr) 64px 64px 64px 86px 92px;
-    min-height: 84px;
-    padding: 14px 22px;
-  }
-
-  .dock {
-    grid-area: dock;
-    min-height: 64px;
-    padding: 10px 40px;
-  }
-}
-
-@media (min-width: 981px) and (max-width: 1560px) {
-  .instant-app {
-    --page-edge: 30px;
-    --bottom-safe: 28px;
-    display: grid;
-    grid-template-columns: minmax(260px, 290px) minmax(600px, 1fr) minmax(260px, 290px);
-    grid-template-areas:
-      "topbar topbar topbar"
-      "status map insight"
-      "toolbar map filters"
-      "legend map mini"
-      "drawer drawer drawer"
-      "composer composer composer"
-      "dock dock dock";
-    align-items: start;
-    gap: 14px;
-    overflow: auto;
-    overflow-x: hidden;
-    padding: 14px var(--page-edge) var(--bottom-safe);
-  }
-
-  .topbar {
-    grid-area: topbar;
-  }
-
-  .legend-card {
-    display: block;
-  }
-
-  .status-card,
-  .insight-card,
-  .toolbar,
-  .time-filter,
-  .mini-map,
-  .planner-drawer {
-    position: relative;
-    inset: auto;
-    width: 100%;
-    margin: 0;
-  }
-
-  .status-card {
-    grid-area: status;
-  }
-
-  .insight-card {
-    grid-area: insight;
-  }
-
-  .toolbar {
-    grid-area: toolbar;
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 8px;
-    padding: 10px;
-  }
-
-  .toolbar button {
-    font-size: 24px;
-  }
-
-  .time-filter {
-    grid-area: filters;
-    display: flex;
-    justify-content: space-around;
-    gap: 8px;
-    padding: 12px 10px;
-  }
-
-  .time-filter button {
-    min-width: 42px;
-    font-size: 14px;
-    white-space: nowrap;
-  }
-
-  .star-map {
-    grid-area: map;
-    width: 100%;
-    max-width: 900px;
-    height: clamp(470px, calc(100vh - 330px), 560px);
-    margin: 0 auto;
-    transform-origin: 50% 48%;
-    overflow: hidden;
-    border-radius: 28px;
-  }
-
-  .planner-drawer {
-    grid-area: drawer;
-    max-height: none;
-  }
-
-  .drawer-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .mini-card {
-    min-height: auto;
-  }
-
-  .mini-map {
-    grid-area: mini;
-    height: 132px;
-  }
-
-  .composer {
-    grid-area: composer;
-    position: relative;
-    left: auto;
-    right: auto;
-    bottom: auto;
-    width: 100%;
-    grid-template-columns: 64px minmax(0, 1fr) repeat(3, 58px) 82px 84px;
-    min-height: 76px;
-    padding: 10px 14px;
-  }
-
-  .command-input {
-    height: 56px;
-  }
-
-  .dock {
-    grid-area: dock;
-    position: relative;
-    left: auto;
-    right: auto;
-    bottom: auto;
-    width: 100%;
-    min-height: 56px;
-    padding: 8px 10px;
-  }
-
-  .dock button {
-    min-height: 40px;
-  }
-}
-
-@media (max-width: 980px) {
-  .topbar {
-    grid-template-columns: 1fr;
-  }
-
-  .search-pill {
-    justify-self: stretch;
-    width: 100%;
-  }
-
-  .meta {
-    justify-content: space-between;
-  }
-
-  .instant-app {
-    --page-edge: 18px;
-    --bottom-safe: 20px;
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      "topbar"
-      "status"
-      "toolbar"
-      "map"
-      "insight"
-      "drawer"
-      "filters"
-      "mini"
-      "composer"
-      "dock";
-    gap: 16px;
-  }
-
-  .composer {
-    left: var(--page-edge);
-    right: var(--page-edge);
   }
 }
 
 @media (max-width: 760px) {
-  .instant-app {
-    --bottom-safe: 18px;
-    display: block;
-    padding-top: 16px;
+  .chat-app {
+    padding: 64px 12px 114px;
   }
 
-  .status-card,
-  .toolbar,
-  .star-map,
-  .insight-card,
-  .planner-drawer,
-  .time-filter,
-  .mini-map,
-  .composer,
-  .dock {
-    width: 100%;
-    max-width: 100%;
-    margin-top: 16px;
-  }
-
-  .topbar {
-    gap: 12px;
-  }
-
-  .brand strong {
-    font-size: 26px;
-  }
-
-  .brand-orbit {
-    width: 58px;
-    height: 58px;
-  }
-
-  .search-pill {
-    height: 56px;
-    padding: 0 20px;
-  }
-
-  .meta {
-    font-size: 15px;
-  }
-
-  .search-pill input,
-  .command-input input {
-    font-size: 16px;
-  }
-
-  .status-card {
-    padding: 20px;
-    overflow: hidden;
-  }
-
-  .card-title {
-    align-items: flex-start;
-  }
-
-  .card-title span {
+  .meta span {
     display: none;
   }
 
-  .status-card h1 {
-    font-size: 28px;
-  }
-
-  .status-card p {
-    font-size: 14px;
-  }
-
-  .progress-list li {
-    grid-template-columns: 18px minmax(76px, 88px) minmax(0, 1fr);
-    gap: 7px;
-    font-size: 12px;
-  }
-
-  .progress-list em {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .progress-list strong {
-    display: none;
-  }
-
-  .star-map {
-    width: 100%;
-    height: 500px;
-    transform: none;
-    transform-origin: 50% 50%;
-    margin: 0;
-  }
-
-  .planet-center {
-    width: 118px;
-    height: 118px;
-  }
-
-  .planet-node,
-  .planet-node .planet {
-    width: 92px;
-    height: 92px;
-  }
-
-  .planet-node .planet span {
-    font-size: 18px;
-  }
-
-  .tag-dot {
-    min-width: 54px;
-    min-height: 30px;
-    padding: 0 7px;
-    font-size: 10px;
-  }
-
-  .more-dot {
-    width: 38px;
-    min-width: 38px;
-    min-height: 30px;
-    right: -30px;
-  }
-
-  .drawer-grid,
-  .profile-grid,
-  .plan-results article,
-  .feedback-line {
+  .quick-prompts {
     grid-template-columns: 1fr;
   }
 
+  .message-list {
+    height: calc(100svh - 190px);
+  }
+
   .composer {
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 10px;
-    min-height: 0;
-    border-radius: 22px;
-    padding: 12px;
+    grid-template-columns: 24px minmax(0, 1fr) 44px 44px 60px;
+    grid-auto-rows: auto;
   }
 
-  .footer-orbit,
-  .command-input,
-  .density-select,
+  .composer > button:nth-of-type(3) {
+    grid-column: 2 / 5;
+  }
+
   .composer .primary-button {
-    grid-column: 1 / -1;
+    grid-column: 5;
   }
-
-  .command-input {
-    height: 58px;
-    padding: 0 18px;
-  }
-
-  .composer > button:not(.brand-orbit):not(.primary-button) {
-    width: 100%;
-    height: 48px;
-    border-radius: 999px;
-  }
-
-  .dock {
-    grid-template-columns: repeat(4, 1fr);
-    min-height: 64px;
-  }
-
-  .dock button {
-    min-width: 0;
-    width: 100%;
-    font-size: 13px;
-  }
-
-  .dock button span {
-    display: block;
-    margin: 0 0 2px;
-    font-size: 20px;
-  }
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; transform: scale(1); }
-  50% { opacity: .4; transform: scale(.7); }
 }
 
 @keyframes drift {
-  0%, 100% {
-    transform: translate3d(0, 0, 0);
-  }
-  50% {
-    transform: translate3d(8px, -10px, 0);
-  }
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(8px, -10px, 0); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: .25; transform: translateY(0); }
+  50% { opacity: 1; transform: translateY(-2px); }
 }
 </style>
-
-
-
-

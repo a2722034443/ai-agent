@@ -44,9 +44,17 @@ def main():
     api-key: {value(cfg, "MIMO_API_KEY")}
     base-url: {value(cfg, "MIMO_BASE_URL", "https://token-plan-cn.xiaomimimo.com/v1")}
     model: {value(cfg, "MIMO_MODEL", "mimo-v2.5-pro")}
-    max-tokens: {value(cfg, "MIMO_MAX_TOKENS", 4096)}
+    max-tokens: {value(cfg, "MIMO_MAX_TOKENS", 1024)}
     temperature: {value(cfg, "MIMO_TEMPERATURE", 0.1)}
-    timeout-ms: {value(cfg, "MIMO_TIMEOUT_MS", 30000)}
+    timeout-ms: {value(cfg, "MIMO_TIMEOUT_MS", 3000)}
+    router-mode: {value(cfg, "MIMO_ROUTER_MODE", "primary-fallback")}
+    secondary:
+      enabled: true
+      api-key: {value(cfg, "MIMO_SECONDARY_API_KEY")}
+      base-url: {value(cfg, "MIMO_SECONDARY_BASE_URL")}
+      model: {value(cfg, "MIMO_SECONDARY_MODEL")}
+      max-tokens: {value(cfg, "MIMO_SECONDARY_MAX_TOKENS", 1024)}
+      timeout-ms: {value(cfg, "MIMO_SECONDARY_TIMEOUT_MS", 4000)}
 """,
         encoding="utf-8",
     )

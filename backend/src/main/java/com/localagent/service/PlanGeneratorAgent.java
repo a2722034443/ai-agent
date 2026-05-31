@@ -47,11 +47,14 @@ public class PlanGeneratorAgent {
             payload.put("routeCandidates", routeCandidates);
             payload.put("webEvidence", webEvidence.stream().limit(3).map(this::compactEvidence).toList());
             payload.put("requestedPlanCount", requestedCount);
-            String content = mimoClient.complete(SYSTEM_PROMPT, objectMapper.writeValueAsString(payload));
+            MimoClient.CompletionResult completion = mimoClient.completeWithMeta(SYSTEM_PROMPT, objectMapper.writeValueAsString(payload));
+            String content = completion.content();
             List<Map<String, Object>> options = objectMapper.readValue(extractJsonArray(content), new TypeReference<>() {});
             traceService.trace(planId, "PlanGeneratorAgent", "ok", start,
                     Map.of("routeCandidateCount", routeCandidates.size(), "evidenceCount", webEvidence.size()),
-                    Map.of("provider", "mimo", "mode", "real", "count", options.size()));
+                    Map.of("provider", "mimo", "mode", "real", "lane", completion.lane(),
+                            "model", completion.model(), "llmDurationMs", completion.durationMs(),
+                            "fallbackReason", completion.fallbackReason(), "count", options.size()));
             return normalize(options, requestedCount);
         } catch (Exception e) {
             traceService.trace(planId, "PlanGeneratorAgent", "blocked", start,

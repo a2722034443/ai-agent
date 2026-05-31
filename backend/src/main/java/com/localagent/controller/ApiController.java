@@ -1,13 +1,17 @@
 package com.localagent.controller;
 
 import com.localagent.dto.ApiDtos.ConfirmRequest;
+import com.localagent.dto.ApiDtos.CommentRequest;
 import com.localagent.dto.ApiDtos.FeedbackRequest;
 import com.localagent.dto.ApiDtos.NearbyPoiRequest;
 import com.localagent.dto.ApiDtos.PlanRequest;
 import com.localagent.dto.ApiDtos.PlanResponse;
 import com.localagent.dto.ApiDtos.SessionRequest;
 import com.localagent.dto.ApiDtos.SessionResponse;
+import com.localagent.dto.ApiDtos.ShareRequest;
+import com.localagent.dto.ApiDtos.VoteRequest;
 import com.localagent.service.AmapPoiSearchTool;
+import com.localagent.service.CollaborationMockService;
 import com.localagent.service.PlanBlockedException;
 import com.localagent.service.PlanningService;
 import com.localagent.service.SessionAuthException;
@@ -32,12 +36,15 @@ public class ApiController {
     private final SessionService sessionService;
     private final PlanningService planningService;
     private final AmapPoiSearchTool poiSearchTool;
+    private final CollaborationMockService collaborationMockService;
 
     public ApiController(SessionService sessionService, PlanningService planningService,
-                         AmapPoiSearchTool poiSearchTool) {
+                         AmapPoiSearchTool poiSearchTool,
+                         CollaborationMockService collaborationMockService) {
         this.sessionService = sessionService;
         this.planningService = planningService;
         this.poiSearchTool = poiSearchTool;
+        this.collaborationMockService = collaborationMockService;
     }
 
     @PostMapping("/sessions")
@@ -71,6 +78,31 @@ public class ApiController {
     @PostMapping("/plans/{id}/feedback")
     public PlanResponse feedback(@PathVariable UUID id, @RequestBody FeedbackRequest request) {
         return planningService.feedback(id, request.message());
+    }
+
+    @PostMapping("/collab/shares")
+    public Map<String, Object> createShare(@RequestBody ShareRequest request) {
+        return collaborationMockService.createShare(request);
+    }
+
+    @PostMapping("/collab/shares/{shareId}/votes")
+    public Map<String, Object> voteShare(@PathVariable String shareId, @RequestBody VoteRequest request) {
+        return collaborationMockService.vote(shareId, request);
+    }
+
+    @PostMapping("/collab/shares/{shareId}/comments")
+    public Map<String, Object> commentShare(@PathVariable String shareId, @RequestBody CommentRequest request) {
+        return collaborationMockService.comment(shareId, request);
+    }
+
+    @GetMapping("/memory")
+    public Map<String, Object> memory() {
+        return collaborationMockService.memory();
+    }
+
+    @GetMapping("/guard/status")
+    public Map<String, Object> guardStatus() {
+        return collaborationMockService.guardStatus();
     }
 
     @ExceptionHandler(SessionAuthException.class)
