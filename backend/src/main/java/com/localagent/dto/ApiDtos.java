@@ -32,6 +32,9 @@ public final class ApiDtos {
     ) {}
     public record ConfirmRequest(int rank) {}
     public record FeedbackRequest(String message) {}
+    public record ShareRequest(UUID planId, Integer selectedRank) {}
+    public record VoteRequest(Integer rank, String voter) {}
+    public record CommentRequest(String author, String text) {}
 
     public record PlanResponse(
             UUID planId,

@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import com.localagent.config.ExternalClientProperties;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -14,9 +15,11 @@ public class ClarificationService {
     );
 
     private final ClarificationAgent clarificationAgent;
+    private final ExternalClientProperties properties;
 
-    public ClarificationService(ClarificationAgent clarificationAgent) {
+    public ClarificationService(ClarificationAgent clarificationAgent, ExternalClientProperties properties) {
         this.clarificationAgent = clarificationAgent;
+        this.properties = properties;
     }
 
     public Map<String, Object> buildClarification(UUID planId, Map<String, Object> intent, String rawMessage) {
@@ -95,6 +98,8 @@ public class ClarificationService {
         Map<String, Object> group = mutableMap(intent.get("group"));
         Map<String, Object> preferences = mutableMap(intent.get("soft_preferences"));
         String message = string(rawMessage);
+        applyDefaultOriginForCurrentLocation(location, message);
+        intent.put("location", location);
 
         if (!hasActionableLocation(location)) {
             fields.add(field("location", "\u5730\u70b9", locationQuestion(location),
@@ -222,6 +227,9 @@ public class ClarificationService {
     private void putLocation(Map<String, Object> location, String text) {
         if (text == null || text.isBlank()) return;
         double[] coordinates = parseCoordinates(text);
+        if (coordinates == null && isCurrentLocationText(text)) {
+            coordinates = parseCoordinates(properties.getAmap().getDefaultOrigin());
+        }
         if (coordinates != null) {
             location.put("city", inferCity(text));
             location.put("district", text.contains("当前位置") ? "当前位置" : text);
@@ -240,6 +248,18 @@ public class ClarificationService {
         }
         location.put("city", inferCity(text));
         location.put("district", text);
+        location.put("radius", "nearby");
+        location.remove("needsConcreteAnchor");
+    }
+
+    private void applyDefaultOriginForCurrentLocation(Map<String, Object> location, String text) {
+        if (hasCoordinates(location) || !isCurrentLocationText(text)) return;
+        double[] coordinates = parseCoordinates(properties.getAmap().getDefaultOrigin());
+        if (coordinates == null) return;
+        location.put("city", inferCity(text));
+        location.put("district", "当前位置");
+        location.put("lng", coordinates[0]);
+        location.put("lat", coordinates[1]);
         location.put("radius", "nearby");
         location.remove("needsConcreteAnchor");
     }
@@ -276,6 +296,11 @@ public class ClarificationService {
 
     private void putGroup(Map<String, Object> group, String text) {
         if (text == null || text.isBlank()) return;
+        if (isNoCompanionText(text)) {
+            group.put("composition", "单人");
+            group.put("total", 1);
+            return;
+        }
         group.put("composition", text);
         Integer total = extractGroupTotal(text);
         if (total != null) {
@@ -512,11 +537,24 @@ public class ClarificationService {
     }
 
     private Integer extractGroupTotal(String text) {
-        if (containsAny(text, "我自己", "一个人", "1人", "单人", "独自")) return 1;
+        if (isNoCompanionText(text) || containsAny(text, "我自己", "一个人", "1人", "单人", "独自", "自己")) return 1;
         if (containsAny(text, "情侣", "两人", "两个人", "2人", "夫妻")) return 2;
         if (containsAny(text, "两个大人一个孩子", "一家三口", "三口", "两大一小")) return 3;
         Integer number = extractNumber(text);
         return number == null || number > 50 ? null : number;
+    }
+
+    private boolean isCurrentLocationText(String text) {
+        String value = string(text);
+        return List.of("附近", "我附近", "在我附近", "当前地点", "当前位置", "本地").contains(value)
+                || value.contains("当前位置")
+                || value.contains("我附近");
+    }
+
+    private boolean isNoCompanionText(String text) {
+        String value = string(text);
+        return List.of("无", "没有", "没", "0", "零").contains(value)
+                || containsAny(value, "没有同行人", "没人同行", "没有人同行", "无同行人", "就我", "只有我", "自己去");
     }
 
     private Integer extractNumber(String text) {

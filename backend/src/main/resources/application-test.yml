@@ -26,3 +26,7 @@ external:
   llm:
     enabled: false
     api-key:
+    router-mode: primary-fallback
+    secondary:
+      enabled: true
+      api-key:

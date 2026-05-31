@@ -21,9 +21,17 @@ external:
     api-key: ${MIMO_API_KEY:replace-with-mimo-api-key}
     base-url: ${MIMO_BASE_URL:https://token-plan-cn.xiaomimimo.com/v1}
     model: ${MIMO_MODEL:mimo-v2.5-pro}
-    max-tokens: ${MIMO_MAX_TOKENS:4096}
+    max-tokens: ${MIMO_MAX_TOKENS:1024}
     temperature: ${MIMO_TEMPERATURE:0.1}
-    timeout-ms: ${MIMO_TIMEOUT_MS:30000}
+    timeout-ms: ${MIMO_TIMEOUT_MS:3000}
+    router-mode: ${MIMO_ROUTER_MODE:primary-fallback}
+    secondary:
+      enabled: ${MIMO_SECONDARY_ENABLED:true}
+      api-key: ${MIMO_SECONDARY_API_KEY:replace-with-secondary-mimo-api-key}
+      base-url: ${MIMO_SECONDARY_BASE_URL:}
+      model: ${MIMO_SECONDARY_MODEL:}
+      max-tokens: ${MIMO_SECONDARY_MAX_TOKENS:1024}
+      timeout-ms: ${MIMO_SECONDARY_TIMEOUT_MS:4000}
 
 app:
   mock-session-store: false

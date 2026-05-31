@@ -231,9 +231,6 @@ public class AmapRouteEstimateTool {
         if (distanceKm <= 1.0) {
             return new RouteMode("walking", WALKING_PATH);
         }
-        if (distanceKm <= 5.0) {
-            return new RouteMode("bicycling", BICYCLING_PATH);
-        }
         return new RouteMode("driving", DRIVING_PATH);
     }
 

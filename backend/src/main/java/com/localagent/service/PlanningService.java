@@ -23,6 +23,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.time.LocalTime;
 import java.time.format.DateTimeParseException;
 import org.springframework.beans.factory.annotation.Value;
@@ -56,6 +60,7 @@ public class PlanningService {
     private final ToolTraceService toolTraceService;
     private final ObjectMapper objectMapper;
     private final boolean allowMockPoi;
+    private final ExecutorService optionalToolExecutor = Executors.newFixedThreadPool(4);
 
     public PlanningService(PlanSessionRepository planSessionRepository,
                            PlanOptionRepository planOptionRepository,
@@ -94,9 +99,7 @@ public class PlanningService {
     public PlanResponse createPlan(String token, PlanRequest request) {
         String message = request == null ? "" : request.message();
         PlanSession session = planSessionRepository.save(PlanSession.create(token, message));
-        Map<String, Object> intent = intentParserAgent.parse(session.getId(), message);
-        intent.put("rawMessage", message);
-        clarificationService.ensureUserFacts(intent, message);
+        Map<String, Object> intent = buildIntent(session.getId(), request, message);
         intent = clarificationService.mergeAnswers(intent, request == null ? null : request.clarificationAnswers());
         applyRequestPreferences(intent, request);
         ensurePoiSearchStrategy(intent);
@@ -111,9 +114,15 @@ public class PlanningService {
             return toResponse(session.getId());
         }
         try {
-            Map<String, Object> weather = weatherTool.weather(session.getId(), intent);
-            List<Map<String, Object>> webEvidence = searchVerifierAgent.verify(session.getId(), intent, message);
+            Map<String, Object> planningIntent = intent;
+            String planningMessage = message;
+            CompletableFuture<Map<String, Object>> weatherFuture = CompletableFuture.supplyAsync(
+                    () -> weatherTool.weather(session.getId(), planningIntent), optionalToolExecutor);
+            CompletableFuture<List<Map<String, Object>>> evidenceFuture = CompletableFuture.supplyAsync(
+                    () -> searchVerifierAgent.verify(session.getId(), planningIntent, planningMessage), optionalToolExecutor);
             List<Poi> candidates = poiSearchTool.searchPois(session.getId(), intent);
+            Map<String, Object> weather = optionalWeather(session.getId(), weatherFuture);
+            List<Map<String, Object>> webEvidence = optionalEvidence(session.getId(), evidenceFuture);
             List<Map<String, Object>> warnings = new ArrayList<>(weatherWarnings(weather));
             List<Map<String, Object>> options = buildOptions(session.getId(), intent, candidates, weather, warnings);
             planValidationService.validate(session.getId(), options, candidates);
@@ -134,6 +143,95 @@ public class PlanningService {
             return toResponse(session.getId());
         } finally {
             routeEstimateTool.clearCache(session.getId());
+        }
+    }
+
+    private Map<String, Object> buildIntent(UUID planId, PlanRequest request, String message) {
+        Map<String, Object> parsed = intentParserAgent.parse(planId, message);
+        Map<String, Object> previous = previousIntent(request);
+        Map<String, Object> intent = mergeIntent(previous, parsed);
+        String rawMessage = rawMessage(previous, message);
+        intent.put("rawMessage", rawMessage);
+        clarificationService.ensureUserFacts(intent, rawMessage);
+        return intent;
+    }
+
+    private Map<String, Object> previousIntent(PlanRequest request) {
+        if (request == null || request.previousPlanId() == null) {
+            return new LinkedHashMap<>();
+        }
+        return planSessionRepository.findById(request.previousPlanId())
+                .map(previous -> fromJson(previous.getIntentJson()))
+                .orElseGet(LinkedHashMap::new);
+    }
+
+    private Map<String, Object> mergeIntent(Map<String, Object> previous, Map<String, Object> parsed) {
+        Map<String, Object> merged = new LinkedHashMap<>(previous == null ? Map.of() : previous);
+        if (parsed == null || parsed.isEmpty()) {
+            return merged;
+        }
+        for (Map.Entry<String, Object> entry : parsed.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+            if (hasUsefulValue(value)) {
+                Object existing = merged.get(key);
+                if (existing instanceof Map<?, ?> && value instanceof Map<?, ?>) {
+                    merged.put(key, mergeNested(castMap(existing), castMap(value)));
+                } else {
+                    merged.put(key, value);
+                }
+            }
+        }
+        return merged;
+    }
+
+    private Map<String, Object> mergeNested(Map<String, Object> previous, Map<String, Object> parsed) {
+        Map<String, Object> merged = new LinkedHashMap<>(previous);
+        parsed.forEach((key, value) -> {
+            if (hasUsefulValue(value)) {
+                merged.put(key, value);
+            }
+        });
+        return merged;
+    }
+
+    private boolean hasUsefulValue(Object value) {
+        if (value == null) return false;
+        if (value instanceof String text) return !text.isBlank() && !"null".equals(text);
+        if (value instanceof Map<?, ?> map) return map.values().stream().anyMatch(this::hasUsefulValue);
+        if (value instanceof List<?> list) return !list.isEmpty();
+        return true;
+    }
+
+    private String rawMessage(Map<String, Object> previous, String message) {
+        String previousRaw = String.valueOf(castMap(previous.get("userFacts")).getOrDefault("rawMessage",
+                previous.getOrDefault("rawMessage", ""))).trim();
+        if (previousRaw.isBlank() || message == null || message.isBlank() || previousRaw.contains(message)) {
+            return previousRaw.isBlank() ? (message == null ? "" : message) : previousRaw;
+        }
+        return previousRaw + "。用户补充：" + message;
+    }
+
+    private Map<String, Object> optionalWeather(UUID planId, CompletableFuture<Map<String, Object>> future) {
+        try {
+            return future.get(3200, TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            toolTraceService.trace(planId, "AmapWeatherTool", "fallback", System.currentTimeMillis(),
+                    Map.of("mode", "optional-timeout"),
+                    Map.of("provider", "amap", "mode", "fallback", "reason", safeReason(e),
+                            "suggestion", "天气暂不可用，建议出发前自行确认天气变化。"));
+            return Map.of("available", false, "suggestion", "天气暂不可用，建议出发前自行确认天气变化。");
+        }
+    }
+
+    private List<Map<String, Object>> optionalEvidence(UUID planId, CompletableFuture<List<Map<String, Object>>> future) {
+        try {
+            return future.get(3200, TimeUnit.MILLISECONDS);
+        } catch (Exception e) {
+            toolTraceService.trace(planId, "WebSearchTool", "fallback", System.currentTimeMillis(),
+                    Map.of("mode", "optional-timeout"),
+                    Map.of("provider", "search", "mode", "fallback", "reason", safeReason(e)));
+            return List.of();
         }
     }
 
@@ -359,7 +457,13 @@ public class PlanningService {
                 continue;
             }
 
-            Map<String, Object> route = routeEstimateTool.route(planId, stops);
+            Map<String, Object> route;
+            try {
+                route = routeEstimateTool.route(planId, stops);
+            } catch (PlanBlockedException e) {
+                tools.recovery(planId, "路线生成失败", signature(stops), "跳过该候选");
+                continue;
+            }
             double distanceKm = ((Number) route.getOrDefault("distanceKm", 0)).doubleValue();
             if (distanceKm > maxRouteDistanceKm(intent)) {
                 tools.recovery(planId, "路线距离过远", signature, "跳过该候选");
@@ -769,6 +873,11 @@ public class PlanningService {
 
     private String stringValue(Object value) {
         return value == null ? null : String.valueOf(value);
+    }
+
+    private String safeReason(Exception e) {
+        Throwable cause = e.getCause() == null ? e : e.getCause();
+        return cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage();
     }
 
     private Integer extractNumber(String text) {

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Instant Trip Product Owner"
+  short_description: "Guide local-life-agent product, backend, and flow delivery"
+  default_prompt: "Use $instant-trip-product-owner to audit and improve the local-life-agent planning journey end to end."

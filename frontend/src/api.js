@@ -74,3 +74,32 @@ export function sendFeedback(planId, message) {
     body: JSON.stringify({ message })
   })
 }
+
+export function createShare(payload) {
+  return request('/api/collab/shares', {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function voteShare(shareId, payload) {
+  return request(`/api/collab/shares/${shareId}/votes`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function submitCollabComment(shareId, payload) {
+  return request(`/api/collab/shares/${shareId}/comments`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  })
+}
+
+export function getMemory() {
+  return request('/api/memory', { method: 'GET' })
+}
+
+export function getGuardStatus() {
+  return request('/api/guard/status', { method: 'GET' })
+}

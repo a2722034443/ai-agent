@@ -68,11 +68,14 @@ public class IntentParserAgent {
     public Map<String, Object> parse(UUID planId, String message) {
         long start = System.currentTimeMillis();
         try {
-            String content = mimoClient.complete(SYSTEM_PROMPT, message == null ? "" : message);
+            MimoClient.CompletionResult completion = mimoClient.completeWithMeta(SYSTEM_PROMPT, message == null ? "" : message);
+            String content = completion.content();
             Map<String, Object> intent = normalize(objectMapper.readValue(extractJsonObject(content), new TypeReference<>() {}));
             traceService.trace(planId, "IntentParserAgent", "ok", start,
                     Map.of("message", safeSnippet(message)),
-                    Map.of("provider", "mimo", "mode", "real", "scenario", intent.get("scenario"),
+                    Map.of("provider", "mimo", "mode", "real", "lane", completion.lane(),
+                            "model", completion.model(), "llmDurationMs", completion.durationMs(),
+                            "fallbackReason", completion.fallbackReason(), "scenario", intent.get("scenario"),
                             "confidence", intent.getOrDefault("confidence", 0)));
             return intent;
         } catch (Exception e) {
@@ -91,7 +94,7 @@ public class IntentParserAgent {
         boolean elderly = containsAny(text, "老人", "长辈", "父母", "行动不便");
         boolean friends = containsAny(text, "朋友", "好友", "同学", "同事", "聚会", "团建");
         boolean couple = containsAny(text, "情侣", "约会", "对象", "女朋友", "男朋友", "夫妻");
-        boolean solo = containsAny(text, "我自己", "一个人", "独自", "单人");
+        boolean solo = containsAny(text, "我自己", "一个人", "独自", "单人", "无同行人", "没有同行人", "就我", "只有我");
         boolean lowCal = containsAny(text, "减肥", "低卡", "清淡", "轻食", "不吃辣", "忌口", "过敏");
         boolean nearby = containsAny(text, "附近", "不要太远", "别离家太远", "步行距离短", "少走路");
 
@@ -199,6 +202,17 @@ public class IntentParserAgent {
             activity.add(0, "室内活动");
             notes.add("天气敏感，优先室内地点。");
         }
+        if (vibe.contains("电影")) {
+            activity.add(0, "电影院");
+        }
+        if (vibe.contains("海边") || vibe.contains("海滨") || vibe.contains("沙滩")) {
+            extra.add(0, "海滨公园");
+            extra.add(1, "海边");
+        }
+        if (vibe.contains("烤肉") || vibe.contains("烧烤")) {
+            dining.add(0, "烤肉");
+            dining.add(1, "烧烤");
+        }
 
         Map<String, Object> strategy = new LinkedHashMap<>();
         strategy.put("activityKeywords", activity.stream().distinct().limit(6).toList());
@@ -294,12 +308,26 @@ public class IntentParserAgent {
     }
 
     private Integer extractBudgetAmount(String text) {
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(\\d{2,5})\\s*(元|块|预算)?").matcher(text);
-        if (!matcher.find()) return null;
-        return Integer.parseInt(matcher.group(1));
+        String value = text == null ? "" : text;
+        java.util.regex.Matcher amountWithUnit = java.util.regex.Pattern
+                .compile("(\\d{2,5})\\s*(元|块|块钱)")
+                .matcher(value);
+        if (amountWithUnit.find()) return Integer.parseInt(amountWithUnit.group(1));
+        java.util.regex.Matcher budgetPrefix = java.util.regex.Pattern
+                .compile("(预算|总预算|人均|每人|花费|消费)[^0-9\\d]{0,8}(\\d{2,5})")
+                .matcher(value);
+        if (budgetPrefix.find()) return Integer.parseInt(budgetPrefix.group(2));
+        return null;
     }
 
     private String extractVibe(String text, boolean family, boolean friends, boolean couple, boolean solo) {
+        if (containsAny(text, "电影", "影院") && containsAny(text, "烤肉", "烧烤") && containsAny(text, "海边", "海滨", "沙滩")) {
+            return "电影、烤肉和海边放松";
+        }
+        if (containsAny(text, "电影", "影院") && containsAny(text, "烤肉", "烧烤")) return "电影和烤肉";
+        if (containsAny(text, "电影", "影院")) return "看电影";
+        if (containsAny(text, "海边", "海滨", "沙滩")) return "海边放松";
+        if (containsAny(text, "烤肉", "烧烤")) return "烤肉聚餐";
         if (containsAny(text, "亲子", "孩子", "儿童")) return "亲子友好";
         if (containsAny(text, "清淡", "低卡", "轻食")) return "清淡健康";
         if (containsAny(text, "展览", "文化", "博物馆")) return "文化展览";

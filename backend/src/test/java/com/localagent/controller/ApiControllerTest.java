@@ -19,12 +19,14 @@ import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
+@TestPropertySource(properties = "external.amap.default-origin=121.588000,38.883000")
 class ApiControllerTest {
     @Autowired
     private MockMvc mockMvc;
@@ -119,7 +121,61 @@ class ApiControllerTest {
     }
 
     @Test
-    void nearbyFriendsRequestStillNeedsConcreteContextBeforePlanning() throws Exception {
+    void durationClarificationAnswerUsesPreviousPlanContextAndReturnsOptions() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+        when(mimoClient.complete(anyString(), anyString())).thenThrow(new IllegalStateException("fast fallback"));
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = extractJsonString(sessionResult, "token");
+
+        String message = "今天晚上 7 点在上海静安寺附近，4 个朋友，预算 800 元，想先找一个有意思的地方再吃饭，路线不要太折腾。";
+        MvcResult firstResult = mockMvc.perform(post("/api/plans")
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "message", message,
+                                "planCount", 3,
+                                "stopCountPreference", "标准"
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
+                .andExpect(jsonPath("$.clarification.fields[0].key").value("duration"))
+                .andReturn();
+
+        String previousPlanId = extractPlanId(firstResult);
+        String secondBody = objectMapper.writeValueAsString(Map.of(
+                "message", "3小时左右",
+                "planCount", 3,
+                "stopCountPreference", "标准",
+                "previousPlanId", previousPlanId,
+                "clarificationAnswers", Map.of("duration", "3小时左右")
+        ));
+
+        mockMvc.perform(post("/api/plans")
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content(secondBody))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("READY"))
+                .andExpect(jsonPath("$.intent.location.city").value("上海"))
+                .andExpect(jsonPath("$.intent.time_window.start").value("19:00"))
+                .andExpect(jsonPath("$.intent.time_window.durationMinutes").value(180))
+                .andExpect(jsonPath("$.intent.group.total").value(4))
+                .andExpect(jsonPath("$.intent.soft_preferences.budgetAmount").value(800))
+                .andExpect(jsonPath("$.options[0].timeline").isArray())
+                .andExpect(jsonPath("$.options[0].timeline.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(3)))
+                .andExpect(jsonPath("$.options[0].route.distanceKm").exists())
+                .andExpect(jsonPath("$.trace[?(@.tool=='AmapPoiSearchTool')]").exists())
+                .andExpect(jsonPath("$.trace[?(@.tool=='AmapRouteEstimateTool')]").exists());
+    }
+
+    @Test
+    void nearbyFriendsRequestUsesDefaultOriginButStillNeedsOtherRequiredContext() throws Exception {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.hasKey(anyString())).thenReturn(true);
         when(mimoClient.complete(anyString(), anyString())).thenThrow(new IllegalStateException("test fallback"));
@@ -138,7 +194,9 @@ class ApiControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
                 .andExpect(jsonPath("$.options").isEmpty())
-                .andExpect(jsonPath("$.clarification.fields[?(@.key=='location')]").exists())
+                .andExpect(jsonPath("$.intent.location.lng").value(121.588))
+                .andExpect(jsonPath("$.intent.location.lat").value(38.883))
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='location')]").doesNotExist())
                 .andExpect(jsonPath("$.clarification.fields[?(@.key=='timeWindow')]").exists())
                 .andExpect(jsonPath("$.clarification.fields[?(@.key=='duration')]").exists())
                 .andExpect(jsonPath("$.clarification.fields[?(@.key=='group')]").exists())
@@ -212,7 +270,7 @@ class ApiControllerTest {
     }
 
     @Test
-    void vagueNearbyAnswerStillAsksForConcreteLocationAndDynamicOptions() throws Exception {
+    void vagueNearbyAnswerUsesDefaultOriginAndStillAsksForInvalidTime() throws Exception {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.hasKey(anyString())).thenReturn(true);
         when(mimoClient.complete(anyString(), anyString())).thenReturn("""
@@ -272,7 +330,9 @@ class ApiControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
                 .andExpect(jsonPath("$.options").isEmpty())
-                .andExpect(jsonPath("$.clarification.fields[?(@.key=='location')]").exists())
+                .andExpect(jsonPath("$.intent.location.lng").value(121.588))
+                .andExpect(jsonPath("$.intent.location.lat").value(38.883))
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='location')]").doesNotExist())
                 .andExpect(jsonPath("$.clarification.fields[?(@.key=='timeWindow')]").exists())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
                         .string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("大连"))))
@@ -358,6 +418,48 @@ class ApiControllerTest {
                 .andExpect(jsonPath("$.intent.userFacts.answers.location").value("当前位置 121.588000,38.883000"))
                 .andExpect(jsonPath("$.intent.location.lng").value(121.588))
                 .andExpect(jsonPath("$.intent.location.lat").value(38.883));
+    }
+
+    @Test
+    void currentLocationAnswerUsesConfiguredDefaultOriginAndNoCompanionMeansSolo() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+        when(mimoClient.complete(anyString(), anyString())).thenThrow(new IllegalStateException("fast fallback"));
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = extractJsonString(sessionResult, "token");
+
+        String body = """
+                {
+                  "message": "我想在我附近游玩，想去吃个烤肉，看个电影，再去海边玩玩。大约3小时。早上10点出发",
+                  "planCount": 3,
+                  "stopCountPreference": "标准",
+                  "clarificationAnswers": {
+                    "location": "当前位置",
+                    "group": "无",
+                    "budget": "500"
+                  }
+                }
+                """;
+
+        mockMvc.perform(post("/api/plans")
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("READY"))
+                .andExpect(jsonPath("$.options").isArray())
+                .andExpect(jsonPath("$.options[0].timeline.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(3)))
+                .andExpect(jsonPath("$.intent.location.lng").value(121.588))
+                .andExpect(jsonPath("$.intent.location.lat").value(38.883))
+                .andExpect(jsonPath("$.intent.group.total").value(1))
+                .andExpect(jsonPath("$.intent.group.composition").value("单人"))
+                .andExpect(jsonPath("$.intent.poiSearchStrategy.activityKeywords").value(org.hamcrest.Matchers.hasItem("电影院")))
+                .andExpect(jsonPath("$.intent.poiSearchStrategy.diningKeywords").value(org.hamcrest.Matchers.hasItem("烤肉")));
     }
 
     @Test
