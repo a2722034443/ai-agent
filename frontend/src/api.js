@@ -1,15 +1,32 @@
 const BASE_URL = import.meta.env.VITE_API_URL || ''
+const TOKEN_KEY = 'lla_token'
+const DEFAULT_NICKNAME = '立刻游用户'
+
+export function getSessionToken() {
+  return localStorage.getItem(TOKEN_KEY) || ''
+}
+
+export function clearSessionToken() {
+  localStorage.removeItem(TOKEN_KEY)
+}
 
 async function request(path, options = {}) {
+  const { skipAuthRecovery = false, headers = {}, ...fetchOptions } = options
+  const sessionToken = getSessionToken()
   const res = await fetch(`${BASE_URL}${path}`, {
+    ...fetchOptions,
     headers: {
       'Content-Type': 'application/json',
-      ...(localStorage.getItem('lla_token') ? { 'X-Session-Token': localStorage.getItem('lla_token') } : {}),
-      ...(options.headers || {})
-    },
-    ...options
+      ...(sessionToken ? { 'X-Session-Token': sessionToken } : {}),
+      ...headers
+    }
   })
   const data = await res.json().catch(() => ({}))
+  if (res.status === 401 && sessionToken && path !== '/api/sessions' && !skipAuthRecovery) {
+    clearSessionToken()
+    await createSession(DEFAULT_NICKNAME)
+    return request(path, { ...options, skipAuthRecovery: true })
+  }
   if (!res.ok) {
     const error = new Error(data.error || `HTTP ${res.status}`)
     error.status = res.status
@@ -22,9 +39,10 @@ async function request(path, options = {}) {
 export async function createSession(nickname) {
   const data = await request('/api/sessions', {
     method: 'POST',
-    body: JSON.stringify({ nickname })
+    body: JSON.stringify({ nickname }),
+    skipAuthRecovery: true
   })
-  localStorage.setItem('lla_token', data.token)
+  localStorage.setItem(TOKEN_KEY, data.token)
   return data
 }
 
@@ -33,6 +51,13 @@ export function createPlan(payload) {
   return request('/api/plans', {
     method: 'POST',
     body: JSON.stringify(body)
+  })
+}
+
+export function nearbyPois(payload) {
+  return request('/api/nearby-pois', {
+    method: 'POST',
+    body: JSON.stringify(payload)
   })
 }
 

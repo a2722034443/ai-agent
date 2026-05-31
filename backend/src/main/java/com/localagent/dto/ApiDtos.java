@@ -18,6 +18,18 @@ public final class ApiDtos {
             Map<String, Object> clarificationAnswers,
             UUID previousPlanId
     ) {}
+    public record NearbyPoiRequest(
+            Double lng,
+            Double lat,
+            Integer radius,
+            List<NearbyPoiCategoryRequest> categories
+    ) {}
+    public record NearbyPoiCategoryRequest(
+            String key,
+            String label,
+            String keyword,
+            Integer limit
+    ) {}
     public record ConfirmRequest(int rank) {}
     public record FeedbackRequest(String message) {}
 

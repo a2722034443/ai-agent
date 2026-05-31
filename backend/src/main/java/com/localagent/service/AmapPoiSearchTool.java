@@ -3,6 +3,8 @@ package com.localagent.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.localagent.config.ExternalClientProperties;
+import com.localagent.dto.ApiDtos.NearbyPoiCategoryRequest;
+import com.localagent.dto.ApiDtos.NearbyPoiRequest;
 import com.localagent.model.Poi;
 import com.localagent.model.PoiType;
 import java.net.URI;
@@ -116,6 +118,79 @@ public class AmapPoiSearchTool {
         }
     }
 
+    public Map<String, Object> nearbyPois(NearbyPoiRequest request) {
+        if (request == null || request.lng() == null || request.lat() == null) {
+            throw new IllegalArgumentException("location coordinates are required");
+        }
+        double lng = request.lng();
+        double lat = request.lat();
+        if (lng < 73.0 || lng > 136.0 || lat < 3.0 || lat > 54.0) {
+            throw new IllegalArgumentException("location coordinates are outside supported range");
+        }
+        ExternalClientProperties.Amap amap = properties.getAmap();
+        if (!amap.isEnabled() || isBlank(amap.getWebServiceKey())) {
+            throw new PlanBlockedException(null, "amap", "Amap POI service is not configured", 503);
+        }
+        int radius = clamp(request.radius() == null ? 3000 : request.radius(), 500, 8000);
+        List<NearbyPoiCategoryRequest> categories = request.categories() == null
+                ? List.of()
+                : request.categories();
+        if (categories.isEmpty()) {
+            throw new IllegalArgumentException("at least one category is required");
+        }
+        Map<String, Object> grouped = new LinkedHashMap<>();
+        for (NearbyPoiCategoryRequest category : categories.stream().limit(8).toList()) {
+            String key = safeCategoryKey(category.key());
+            String keyword = category.keyword() == null ? "" : category.keyword().trim();
+            if (key.isBlank() || keyword.isBlank()) {
+                continue;
+            }
+            grouped.put(key, searchNearbyCategory(amap, lng, lat, radius, category));
+        }
+        return Map.of(
+                "provider", "amap",
+                "mode", "real",
+                "anchor", Map.of("lng", lng, "lat", lat, "radius", radius),
+                "categories", grouped
+        );
+    }
+
+    private List<Map<String, Object>> searchNearbyCategory(ExternalClientProperties.Amap amap, double lng, double lat,
+                                                            int radius, NearbyPoiCategoryRequest category) {
+        String sourceUrl = amap.getBaseUrl() + AROUND_PATH;
+        int limit = clamp(category.limit() == null ? 4 : category.limit(), 1, 8);
+        URI uri = URI.create(sourceUrl + "?key=" + encode(amap.getWebServiceKey())
+                + "&keywords=" + encode(category.keyword())
+                + "&location=" + encode(lng + "," + lat)
+                + "&radius=" + radius
+                + "&sortrule=distance&offset=" + Math.max(limit, 8)
+                + "&page=1&extensions=base");
+        try {
+            Map<String, Object> body = sendAmapGet(uri, amap.getTimeoutMs());
+            return castList(body.get("pois")).stream()
+                    .map(raw -> nearbyPoi(raw, category))
+                    .filter(poi -> hasVisibleName(String.valueOf(poi.getOrDefault("name", ""))))
+                    .limit(limit)
+                    .toList();
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    private Map<String, Object> nearbyPoi(Map<String, Object> raw, NearbyPoiCategoryRequest category) {
+        double[] point = parseLocation(String.valueOf(raw.getOrDefault("location", "0,0")));
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("name", String.valueOf(raw.getOrDefault("name", "")));
+        item.put("address", String.valueOf(raw.getOrDefault("address", "")));
+        item.put("distanceMeters", parseInt(raw.get("distance")));
+        item.put("lng", point[0]);
+        item.put("lat", point[1]);
+        item.put("categoryKey", safeCategoryKey(category.key()));
+        item.put("categoryLabel", category.label() == null ? "" : category.label());
+        item.put("keyword", category.keyword());
+        return item;
+    }
+
     private List<Poi> safeSearch(UUID planId, Map<String, Object> intent, PoiType type, String keyword, Anchor anchor) {
         try {
             return searchByKeyword(planId, intent, type, keyword, anchor);
@@ -144,24 +219,13 @@ public class AmapPoiSearchTool {
                 + "&location=" + encode(anchor.lng() + "," + anchor.lat())
                 + "&radius=" + AROUND_RADIUS + "&sortrule=distance&offset=" + POI_OFFSET + "&page=1&extensions=base");
 
-        HttpResponse<String> response = null;
         Map<String, Object> body = Map.of();
         for (int attempt = 0; attempt < 3; attempt++) {
-            requestLimiter.awaitSlot();
-            try {
-                HttpRequest request = HttpRequest.newBuilder(uri)
-                        .timeout(Duration.ofMillis(amap.getTimeoutMs()))
-                        .GET()
-                        .build();
-                response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-                body = objectMapper.readValue(response.body(), new TypeReference<>() {});
-                if (!isQpsLimited(body)) {
-                    break;
-                }
-                requestLimiter.backoff(attempt);
-            } finally {
-                requestLimiter.releaseSlot();
+            body = sendAmapGet(uri, amap.getTimeoutMs());
+            if (!isQpsLimited(body)) {
+                break;
             }
+            requestLimiter.backoff(attempt);
         }
         List<Map<String, Object>> rawPois = castList(body.get("pois"));
         List<Poi> mapped = rawPois.stream()
@@ -171,7 +235,7 @@ public class AmapPoiSearchTool {
                 .toList();
 
         Map<String, Object> output = new LinkedHashMap<>(traceService.externalMeta(
-                "amap", "real", sourceUrl, String.valueOf(body.getOrDefault("infocode", response == null ? "" : response.statusCode()))));
+                "amap", "real", sourceUrl, String.valueOf(body.getOrDefault("infocode", body.getOrDefault("httpStatus", "")))));
         output.put("keyword", keyword);
         output.put("anchor", anchor == null ? "" : anchor.name());
         output.put("count", mapped.size());
@@ -333,6 +397,41 @@ public class AmapPoiSearchTool {
     private boolean isQpsLimited(Map<String, Object> body) {
         return "10021".equals(String.valueOf(body.getOrDefault("infocode", "")))
                 || String.valueOf(body.getOrDefault("info", "")).contains("CUQPS");
+    }
+
+    private Map<String, Object> sendAmapGet(URI uri, int timeoutMs) throws Exception {
+        requestLimiter.awaitSlot();
+        try {
+            HttpRequest request = HttpRequest.newBuilder(uri)
+                    .timeout(Duration.ofMillis(timeoutMs))
+                    .GET()
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            Map<String, Object> body = objectMapper.readValue(response.body(), new TypeReference<>() {});
+            body.putIfAbsent("httpStatus", response.statusCode());
+            return body;
+        } finally {
+            requestLimiter.releaseSlot();
+        }
+    }
+
+    private int parseInt(Object value) {
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        try {
+            return Integer.parseInt(String.valueOf(value));
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private String safeCategoryKey(String key) {
+        return key == null ? "" : key.replaceAll("[^A-Za-z0-9_-]", "");
+    }
+
+    private int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     private boolean hasVisibleName(String value) {

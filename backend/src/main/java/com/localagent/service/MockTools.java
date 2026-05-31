@@ -41,19 +41,28 @@ public class MockTools {
         int totalSeconds = 0;
         double distance = 0.0;
         List<Integer> segmentMinutes = new ArrayList<>();
+        List<String> routeModes = new ArrayList<>();
         for (int i = 1; i < stops.size(); i++) {
             double segment = distanceKm(stops.get(i - 1), stops.get(i));
             distance += segment;
-            int segSeconds = Math.max(60, (int) Math.round(segment * 240));  // 骑行约 15km/h
+            String mode = routeMode(segment);
+            int secondsPerKm = switch (mode) {
+                case "walking" -> 720;
+                case "driving" -> 120;
+                default -> 240;
+            };
+            int segSeconds = Math.max(60, (int) Math.round(segment * secondsPerKm));
             totalSeconds += segSeconds;
             segmentMinutes.add(segSeconds / 60);
+            routeModes.add(mode);
         }
         int travel = totalSeconds / 60;
         Map<String, Object> output = new LinkedHashMap<>();
         output.put("travelMinutes", travel);
         output.put("distanceKm", Math.round(distance * 10.0) / 10.0);
         output.put("segmentMinutes", segmentMinutes);
-        output.put("source", "mock_route_estimate");
+        output.put("routeModes", routeModes);
+        output.put("source", "mock_dynamic_route_estimate");
         output.putAll(traceService.externalMeta("mock", "mock", "local-distance", "ok"));
         trace(planId, "RouteEstimateTool", "ok", start, Map.of("stops", stops.stream().map(Poi::getName).toList()), output);
         return output;
@@ -170,6 +179,16 @@ public class MockTools {
         double dx = (a.getLng() - b.getLng()) * 85.0;
         double dy = (a.getLat() - b.getLat()) * 111.0;
         return Math.sqrt(dx * dx + dy * dy);
+    }
+
+    private String routeMode(double distanceKm) {
+        if (distanceKm <= 1.0) {
+            return "walking";
+        }
+        if (distanceKm <= 5.0) {
+            return "bicycling";
+        }
+        return "driving";
     }
 
     private void trace(UUID planId, String toolName, String status, long start, Object input, Object output) {

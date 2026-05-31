@@ -92,17 +92,33 @@ public class ClarificationService {
         List<Map<String, Object>> fields = new ArrayList<>();
         Map<String, Object> location = mutableMap(intent.get("location"));
         Map<String, Object> timeWindow = mutableMap(intent.get("time_window"));
+        Map<String, Object> group = mutableMap(intent.get("group"));
+        Map<String, Object> preferences = mutableMap(intent.get("soft_preferences"));
         String message = string(rawMessage);
 
-        // 只有 location 和 timeWindow.start 是真正必须澄清的字段
-        // 其余字段（duration、group、budget、preferences）给合理默认值，不触发澄清
         if (!hasActionableLocation(location)) {
-            fields.add(field("location", "地点", locationQuestion(location),
+            fields.add(field("location", "\u5730\u70b9", locationQuestion(location),
                     locationSuggestions(message)));
         }
         if (blank(timeWindow.get("start")) || hasInvalidTime(timeWindow)) {
-            fields.add(field("timeWindow", "开始时间", timeQuestion(timeWindow),
+            fields.add(field("timeWindow", "\u5f00\u59cb\u65f6\u95f4", timeQuestion(timeWindow),
                     timeSuggestions(message)));
+        }
+        if (blank(timeWindow.get("durationMinutes")) && blank(timeWindow.get("end"))) {
+            fields.add(field("duration", "\u6e38\u73a9\u65f6\u957f", durationQuestion(timeWindow),
+                    durationSuggestions(message)));
+        }
+        if (blank(group.get("composition")) || blank(group.get("total"))) {
+            fields.add(field("group", "\u540c\u884c\u4eba", "\u51e0\u4e2a\u4eba\u540c\u884c\uff1f\u6709\u6ca1\u6709\u5b69\u5b50\u3001\u8001\u4eba\u6216\u9700\u8981\u7167\u987e\u7684\u4eba\uff1f",
+                    groupSuggestions(message)));
+        }
+        if (blank(preferences.get("budgetAmount")) && blank(preferences.get("budget"))) {
+            fields.add(field("budget", "\u9884\u7b97", "\u603b\u9884\u7b97\u5927\u6982\u662f\u591a\u5c11\uff1f",
+                    budgetSuggestions(group)));
+        }
+        if (blank(preferences.get("vibe")) && blank(intent.get("scenario"))) {
+            fields.add(field("preferences", "\u6838\u5fc3\u9700\u6c42", "\u8fd9\u6b21\u6700\u60f3\u6ee1\u8db3\u4ec0\u4e48\u9700\u6c42\uff1f",
+                    preferenceSuggestions(message, group)));
         }
         return fields;
     }
@@ -373,6 +389,14 @@ public class ClarificationService {
             return "开始时间还不够明确，请换成具体时间，例如 10:00、14:30 或 晚上7点。";
         }
         return "具体几点开始？";
+    }
+
+    private String durationQuestion(Map<String, Object> timeWindow) {
+        String start = string(timeWindow.get("start"));
+        if (!start.isBlank()) {
+            return "已识别开始时间 " + start + "，还需要知道大概玩多久，或者最晚几点结束。";
+        }
+        return "大概想玩多久，或者最晚几点结束？";
     }
 
     private List<String> locationSuggestions(String message) {
