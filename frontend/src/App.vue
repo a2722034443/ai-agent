@@ -21,7 +21,7 @@
       </div>
     </header>
 
-    <section v-if="activeView === 'chat'" class="chat-shell">
+    <section v-if="activeView === 'chat'" :class="['chat-shell', { 'result-mode': showPlanWorkspace }]">
       <div v-if="messages.length === 0" class="empty-state">
         <span class="empty-logo brand-orbit"></span>
         <h1>嗨，我是你的出行助理</h1>
@@ -33,7 +33,68 @@
         </div>
       </div>
 
-      <ol v-else class="message-list">
+      <div v-else class="step-summary">
+        <div class="step-card-list">
+          <button
+            v-for="step in stepCards"
+            :key="step.key"
+            type="button"
+            :class="['step-card', step.status]"
+            @click="goToStep(step.key)"
+          >
+            <span>{{ step.index }}</span>
+            <strong>{{ step.title }}</strong>
+            <small>{{ step.summary }}</small>
+          </button>
+        </div>
+        <button
+          v-if="hasFinalPlans"
+          class="summary-share"
+          type="button"
+          @click="createShareLink"
+        >
+          分享给同行人
+        </button>
+      </div>
+
+      <section v-if="hasFinalPlans" v-show="showPlanWorkspace" class="result-workspace">
+        <aside class="result-plans" aria-label="方案列表">
+          <article
+            v-for="plan in shownPlans"
+            :key="plan.rank"
+            :class="['plan-card', { active: activeMapRank === plan.rank }]"
+            @click="viewPlanOnMap(plan.rank)"
+          >
+            <header>
+              <strong>{{ plan.name }}</strong>
+              <span>{{ plan.tag }}</span>
+            </header>
+            <p class="timeline-line">{{ compactTimeline(plan.timeline) }}</p>
+            <div class="plan-meta">
+              <span>预算 {{ formatMoney(plan.budgetEstimate) }}</span>
+              <span>{{ formatHours(plan.totalMinutes) }}</span>
+              <span>距离 {{ plan.route?.distanceKm || '2.1' }}km</span>
+            </div>
+            <footer>
+              <button type="button" @click.stop="expandedRank = expandedRank === plan.rank ? null : plan.rank">查看详情</button>
+              <button class="pick-button" type="button" @click.stop="selectPlan(plan.rank)">选这个</button>
+            </footer>
+            <div v-if="expandedRank === plan.rank" class="plan-detail">
+              <p v-for="reason in planAdvantages(plan)" :key="reason">{{ reason }}</p>
+            </div>
+          </article>
+        </aside>
+        <div class="result-map">
+          <TripMap
+            :plans="shownPlans"
+            :active-rank="activeMapRank"
+            :origin="mapOrigin"
+            :guard-mode="activeView === 'execute'"
+          />
+        </div>
+      </section>
+
+      <ol v-if="!showPlanWorkspace" class="message-list">
         <li v-for="item in messages" :key="item.id" :class="['message-row', item.role]">
           <span v-if="item.role === 'assistant'" class="bubble-avatar brand-orbit"></span>
           <article class="bubble">
@@ -43,46 +104,36 @@
               <span></span><span></span><span></span>
               正在为你规划方案...
             </div>
-            <div v-if="item.plans?.length" class="plan-stack">
-              <article
-                v-for="plan in item.plans"
-                :key="plan.rank"
-                :class="['plan-card', { active: activeMapRank === plan.rank }]"
-                @click="viewPlanOnMap(plan.rank)"
-              >
-                <header>
-                  <strong>{{ plan.name }}</strong>
-                  <span>{{ plan.tag }}</span>
-                </header>
-                <p class="timeline-line">{{ compactTimeline(plan.timeline) }}</p>
-                <div class="plan-meta">
-                  <span>预算 {{ formatMoney(plan.budgetEstimate) }}</span>
-                  <span>{{ formatHours(plan.totalMinutes) }}</span>
-                  <span>距离 {{ plan.route?.distanceKm || '2.1' }}km</span>
-                </div>
-                <footer>
-                  <button type="button" @click.stop="expandedRank = expandedRank === plan.rank ? null : plan.rank">查看详情</button>
-                  <button class="pick-button" type="button" @click.stop="selectPlan(plan.rank)">选这个</button>
-                </footer>
-                <div v-if="expandedRank === plan.rank" class="plan-detail">
-                  <p v-for="reason in plan.fitReasons || []" :key="reason">{{ reason }}</p>
-                </div>
-              </article>
-              <TripMap
-                v-if="item.id === latestPlanMessageId"
-                :plans="shownPlans"
-                :active-rank="activeMapRank"
-                :origin="mapOrigin"
-                :guard-mode="activeView === 'execute'"
-              />
-            </div>
             <div v-if="item.clarification?.fields?.length" class="clarify-card">
-              <strong>{{ item.clarification.message || '还需要补齐几个关键信息' }}</strong>
-              <label v-for="field in item.clarification.fields" :key="field.key">
-                <span>{{ field.label }}</span>
-                <input v-model="clarificationAnswers[field.key]" :placeholder="field.expectedAnswerHint || field.question || '请输入'" />
-              </label>
-              <button class="primary-button" type="button" :disabled="loading" @click="submitClarification">补齐后规划</button>
+              <header class="clarify-head">
+                <strong>{{ item.clarification.message || '还需要补齐几个关键信息' }}</strong>
+              </header>
+              <div class="clarify-layout">
+                <form class="clarify-form" @submit.prevent="submitClarification">
+                  <label v-for="field in orderedClarificationFields(item.clarification.fields)" :key="field.key">
+                    <span>{{ field.label }}</span>
+                    <input
+                      v-model="clarificationAnswers[field.key]"
+                      :placeholder="clarificationPlaceholder(field)"
+                      @input="handleClarificationInput(field.key)"
+                    />
+                  </label>
+                  <button class="primary-button clarify-submit" type="submit" :disabled="loading">补齐后规划</button>
+                </form>
+                <aside class="clarify-presets" aria-label="智能补齐选项">
+                  <button
+                    v-for="preset in clarificationPresets(item)"
+                    :key="preset.code"
+                    type="button"
+                    :class="['preset-card', { selected: selectedClarificationPreset === preset.code }]"
+                    @click="applyClarificationPreset(preset)"
+                  >
+                    <span class="preset-check">✓</span>
+                    <strong><b>{{ preset.code }}</b>{{ preset.title }}</strong>
+                    <small>{{ preset.summary }}</small>
+                  </button>
+                </aside>
+              </div>
             </div>
           </article>
         </li>
@@ -140,7 +191,7 @@
       </div>
     </section>
 
-    <footer class="composer glass">
+    <footer v-if="showComposer" class="composer glass">
       <span class="assistant-dot brand-orbit"></span>
       <label class="command-input">
         <input
@@ -151,7 +202,6 @@
       </label>
       <button type="button" :class="{ active: voiceRecording }" @click="toggleVoice">语音</button>
       <button type="button" @click="openImageTool">图片</button>
-      <button type="button" @click="createShareLink" :disabled="!shownPlans.length">分享给同行人</button>
       <button class="primary-button" type="button" :disabled="!message.trim() || loading" @click="plan">
         {{ loading ? '规划中' : '规划' }}
       </button>
@@ -171,14 +221,16 @@ const loading = ref(false)
 const voiceRecording = ref(false)
 const fileInput = ref(null)
 const activeView = ref('chat')
+const currentStep = ref('need')
 const messages = ref([])
 const currentPlanId = ref('')
 const shownPlans = ref([])
-const latestPlanMessageId = ref('')
 const activeMapRank = ref(1)
 const mapOrigin = ref({})
 const clarification = ref({})
 const clarificationAnswers = ref({})
+const completedClarificationAnswers = ref({})
+const selectedClarificationPreset = ref('')
 const expandedRank = ref(null)
 const selectedRank = ref(null)
 const shareId = ref('')
@@ -191,6 +243,41 @@ const executionSteps = ref([
   { name: '正在安排孩子小礼物配送', status: 'waiting' }
 ])
 const memoryTags = ref(['老婆减肥', '孩子要亲子设施', '朋友不吃辣', '周末不跑远'])
+
+const hasFinalPlans = computed(() => shownPlans.value.length > 0)
+const showPlanWorkspace = computed(() => activeView.value === 'chat' && hasFinalPlans.value && currentStep.value === 'plans')
+const showComposer = computed(() => activeView.value !== 'chat' || currentStep.value !== 'plans' || !hasFinalPlans.value)
+const stepCards = computed(() => {
+  const userText = latestUserText()
+  const answerSource = hasFinalPlans.value ? completedClarificationAnswers.value : clarificationAnswers.value
+  const clarificationText = Object.entries(answerSource)
+    .filter(([, value]) => value)
+    .map(([key, value]) => `${fieldLabel(key)} ${value}`)
+    .join(' · ')
+  return [
+    {
+      key: 'need',
+      index: 1,
+      title: '出行需求',
+      summary: userText || '一句话告诉我需求',
+      status: currentStep.value === 'need' ? 'current' : userText ? 'done' : 'pending'
+    },
+    {
+      key: 'clarify',
+      index: 2,
+      title: '信息补齐',
+      summary: clarificationText || (hasFinalPlans.value ? '已补齐关键信息' : '等待补齐'),
+      status: currentStep.value === 'clarify' ? 'current' : hasFinalPlans.value || clarificationText ? 'done' : 'pending'
+    },
+    {
+      key: 'plans',
+      index: 3,
+      title: '方案地图',
+      summary: hasFinalPlans.value ? `${shownPlans.value.length} 套方案已生成` : '生成后展开查看',
+      status: currentStep.value === 'plans' && hasFinalPlans.value ? 'current' : hasFinalPlans.value ? 'done' : 'pending'
+    }
+  ]
+})
 
 const quickPrompts = [
   { label: '家庭周末游', text: '今天下午有空，带老婆孩子出去玩，别离家太远，老婆最近在减肥。' },
@@ -222,6 +309,10 @@ function nowText() {
   return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
 }
 
+function latestUserText() {
+  return messages.value.findLast(item => item.role === 'user')?.text || message.value || ''
+}
+
 async function ensureSession() {
   const existingToken = getSessionToken()
   if (existingToken) {
@@ -242,6 +333,9 @@ async function plan() {
   if (!text || loading.value) return
   loading.value = true
   activeView.value = 'chat'
+  currentStep.value = 'need'
+  shownPlans.value = []
+  completedClarificationAnswers.value = {}
   messages.value.push({ id: crypto.randomUUID(), role: 'user', text, time: nowText() })
   const loadingId = crypto.randomUUID()
   messages.value.push({ id: loadingId, role: 'assistant', loading: true, time: nowText() })
@@ -253,10 +347,16 @@ async function plan() {
     shownPlans.value = normalizePlans(data.options || [])
     syncMapState(data, shownPlans.value)
     clarification.value = data.clarification || {}
+    selectedClarificationPreset.value = ''
+    if (!shownPlans.value.length) {
+      completedClarificationAnswers.value = {}
+      currentStep.value = clarification.value?.fields?.length ? 'clarify' : 'need'
+    } else {
+      currentStep.value = 'plans'
+    }
     replaceLoading(loadingId, {
       role: 'assistant',
-      text: shownPlans.value.length ? '我先给你 3 套可执行方案，选中后可以分享给同行人一起投票。' : '',
-      plans: shownPlans.value,
+      text: shownPlans.value.length ? '方案已生成，下面展开查看地图和路线。' : '',
       clarification: clarification.value,
       time: nowText()
     })
@@ -293,16 +393,21 @@ async function submitClarification() {
     clarification.value = shownPlans.value.length ? {} : (data.clarification || {})
     const hasMoreClarification = !!clarification.value?.fields?.length
     if (shownPlans.value.length) {
+      completedClarificationAnswers.value = answers
       clarificationAnswers.value = {}
+      selectedClarificationPreset.value = ''
+      currentStep.value = 'plans'
+    } else if (hasMoreClarification) {
+      selectedClarificationPreset.value = ''
+      currentStep.value = 'clarify'
     }
     replaceLoading(loadingId, {
       role: 'assistant',
       text: shownPlans.value.length
-        ? `信息补齐了，我重新整理了 ${shownPlans.value.length} 套方案。`
+        ? `信息补齐了，已生成 ${shownPlans.value.length} 套方案，下面展开查看地图和路线。`
         : hasMoreClarification
           ? ''
           : '信息已收到，但暂时没有生成可展示方案，请换一个更具体的地点或放宽范围后再试。',
-      plans: shownPlans.value,
       clarification: clarification.value,
       time: nowText()
     })
@@ -311,6 +416,98 @@ async function submitClarification() {
   } finally {
     loading.value = false
   }
+}
+
+function orderedClarificationFields(fields = []) {
+  const order = ['location', 'duration', 'group', 'budget', 'timeWindow', 'preferences']
+  return [...fields].sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key))
+}
+
+function clarificationPlaceholder(field) {
+  if (field?.key === 'location') return '例如：杭州西湖附近；或：当前位置'
+  return field?.expectedAnswerHint || field?.question || '请输入'
+}
+
+function clarificationPresets(item) {
+  const fields = item?.clarification?.fields || []
+  const text = latestUserText()
+  const scenario = inferPresetScenario(text)
+  const presets = presetTemplates(scenario)
+  return presets.map(preset => {
+    const values = normalizePresetValues(preset.values)
+    return {
+      ...preset,
+      values,
+      fieldKeys: fields.map(field => field.key),
+      summary: presetSummary(values, fields)
+    }
+  })
+}
+
+function inferPresetScenario(text) {
+  if (/孩子|小孩|亲子|老婆|老公|家庭|宝宝/.test(text)) return 'family'
+  if (/朋友|聚会|同学|同事|轰趴|烤肉|烧烤|电影/.test(text)) return 'friends'
+  if (/情侣|约会|对象|Citywalk|citywalk|逛吃|散步/.test(text)) return 'citywalk'
+  return 'nearby'
+}
+
+function presetTemplates(scenario) {
+  const templates = {
+    family: [
+      { code: 'A', title: '家庭周末游', values: { location: '当前位置', duration: '4小时', group: '2大1小', budget: '400元', preferences: '亲子活动和轻松晚餐' } },
+      { code: 'B', title: '亲子室内游', values: { location: '当前位置', duration: '3小时', group: '2大1小', budget: '600元', preferences: '儿童友好室内活动和简餐' } },
+      { code: 'C', title: '低步行家庭游', values: { location: '当前位置', duration: '3小时', group: '一家三口', budget: '500元', preferences: '少走路、可休息、清淡餐厅' } }
+    ],
+    friends: [
+      { code: 'A', title: '朋友4人小聚', values: { location: '当前位置', duration: '3小时', group: '4个朋友', budget: '800元', preferences: '娱乐活动、烤肉和电影' } },
+      { code: 'B', title: '轻松电影局', values: { location: '当前位置', duration: '3小时', group: '2个朋友', budget: '500元', preferences: '看电影、吃饭、路线顺路' } },
+      { code: 'C', title: '聚会逛吃局', values: { location: '当前位置', duration: '4小时', group: '4个朋友', budget: '1000元', preferences: '聚会、烧烤、少折腾' } }
+    ],
+    citywalk: [
+      { code: 'A', title: '情侣Citywalk', values: { location: '当前位置', duration: '3小时', group: '情侣两人', budget: '500元', preferences: 'Citywalk、咖啡、安静晚餐' } },
+      { code: 'B', title: '轻松逛吃', values: { location: '当前位置', duration: '4小时', group: '两个人', budget: '600元', preferences: '边逛边吃、少走回头路' } },
+      { code: 'C', title: '展览散步', values: { location: '当前位置', duration: '3小时', group: '情侣两人', budget: '700元', preferences: '展览、散步、有氛围感' } }
+    ],
+    nearby: [
+      { code: 'A', title: '附近轻松游', values: { location: '当前位置', duration: '3小时', group: '我自己', budget: '300元', preferences: '轻松逛逛和吃饭' } },
+      { code: 'B', title: '本地半日游', values: { location: '当前位置', duration: '4小时', group: '两个人', budget: '500元', preferences: '活动、简餐、路线顺路' } },
+      { code: 'C', title: '省心短途游', values: { location: '当前位置', duration: '2小时', group: '我自己', budget: '200元', preferences: '附近可玩、少走路' } }
+    ]
+  }
+  return templates[scenario] || templates.nearby
+}
+
+function normalizePresetValues(values) {
+  return {
+    location: values.location,
+    duration: values.duration,
+    group: values.group,
+    budget: values.budget,
+    timeWindow: values.timeWindow,
+    preferences: values.preferences
+  }
+}
+
+function presetSummary(values, fields = []) {
+  const availableKeys = new Set(fields.map(field => field.key))
+  const get = key => availableKeys.size && !availableKeys.has(key) ? '' : values[key]
+  return [get('location'), get('duration'), get('group'), get('budget')]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+function applyClarificationPreset(preset) {
+  const next = { ...clarificationAnswers.value }
+  const allowedKeys = new Set(preset.fieldKeys || Object.keys(preset.values))
+  for (const [key, value] of Object.entries(preset.values)) {
+    if (value && allowedKeys.has(key)) next[key] = value
+  }
+  clarificationAnswers.value = next
+  selectedClarificationPreset.value = preset.code
+}
+
+function handleClarificationInput() {
+  selectedClarificationPreset.value = ''
 }
 
 async function buildClarificationAnswers() {
@@ -363,7 +560,6 @@ function getBrowserPosition() {
 function replaceLoading(id, next) {
   const index = messages.value.findIndex(item => item.id === id)
   if (index >= 0) messages.value[index] = { id, ...next }
-  if (next.plans?.length) latestPlanMessageId.value = id
 }
 
 function syncMapState(data, plans) {
@@ -375,6 +571,34 @@ function syncMapState(data, plans) {
 
 function viewPlanOnMap(rank) {
   activeMapRank.value = rank
+}
+
+function goToStep(key) {
+  if (key === 'plans' && !hasFinalPlans.value) return
+  currentStep.value = key
+  activeView.value = 'chat'
+  if (key === 'need') {
+    nextTick(scrollToBottom)
+    return
+  }
+  if (key === 'clarify') {
+    const lastClarification = [...messages.value].reverse().find(item => item.clarification?.fields?.length)
+    if (lastClarification) {
+      messages.value = messages.value.filter(item => item.role === 'user' || item.id === lastClarification.id || item.loading)
+    }
+    nextTick(scrollToBottom)
+  }
+}
+
+function fieldLabel(key) {
+  return {
+    location: '地点',
+    duration: '时长',
+    group: '同行人',
+    budget: '预算',
+    timeWindow: '时间',
+    preferences: '需求'
+  }[key] || key
 }
 
 function normalizePlans(options) {
@@ -397,8 +621,38 @@ function compactTimeline(timeline = []) {
   if (!timeline.length) return '14:00 出发 → 15:00 周边活动 → 18:00 晚餐'
   return timeline.slice(0, 4).map((stop, index) => {
     if (index === 0) return `${stop.time || '现在'} 出发`
-    return `${stop.time || ''} ${stop.name}`.trim()
+    return `${stop.time || ''} ${simplifyPoiName(stop.name)}`.trim()
   }).join(' → ')
+}
+
+function simplifyPoiName(name) {
+  const raw = String(name || '周边地点').trim()
+  const suffix = raw.match(/（[^）]+）|\([^)]+\)$/)?.[0] || ''
+  let base = suffix ? raw.slice(0, -suffix.length) : raw
+  base = base
+    .replace(/羊肉(?=手抓饭|泡馍|汤|面|粉)/g, '')
+    .replace(/(手抓饭)羊肉串/g, '$1')
+    .replace(/(.{2,6})\1+/g, '$1')
+    .replace(/(旗舰店|体验店|官方店|专门店|主题店){2,}/g, '$1')
+  if (base.length > 14) {
+    base = base.replace(/(餐厅|饭店|美食|小吃|料理|烤肉|烧烤|火锅|咖啡|影院|影城|公园|广场).*$/, '$1')
+  }
+  return `${base}${suffix}`
+}
+
+function planAdvantages(plan) {
+  const timeline = Array.isArray(plan?.timeline) ? plan.timeline : []
+  const hasDining = timeline.some(stop => stop.type === '餐饮')
+  const activityNames = timeline.filter(stop => stop.type !== '餐饮').map(stop => simplifyPoiName(stop.name)).filter(Boolean)
+  const route = plan?.route || {}
+  const distance = route.distanceKm ? `全程约 ${route.distanceKm}km` : '路线距离已控制'
+  const minutes = route.travelMinutes ? `路上约 ${route.travelMinutes} 分钟` : '路程耗时较短'
+  const firstActivity = activityNames[0] || '核心活动'
+  return [
+    `${firstActivity} 和${hasDining ? '餐饮' : '休息点'}顺路安排，减少来回折返。`,
+    `${distance}，${minutes}，适合本地短时出行。`,
+    `预算和节奏更稳，适合直接选中后分享给同行人确认。`
+  ]
 }
 
 function formatHours(minutes) {
@@ -505,7 +759,12 @@ getGuardStatus().then(data => {
     radial-gradient(circle at 18% 24%, rgba(255, 125, 0, .14), transparent 22%),
     radial-gradient(circle at 78% 18%, rgba(22, 93, 255, .14), transparent 24%),
     linear-gradient(135deg, #f8fbff 0%, #eef5ff 52%, #fff8f0 100%);
-  padding: 72px 16px 96px;
+  padding: 80px 24px 104px;
+  font-size: 16px;
+}
+
+.chat-app:has(.result-mode) {
+  padding-bottom: 32px;
 }
 
 .sky {
@@ -560,7 +819,7 @@ input {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 max(16px, calc((100vw - 640px) / 2));
+  padding: 0 max(24px, calc((100vw - 800px) / 2));
 }
 
 .brand {
@@ -581,7 +840,7 @@ input {
 .brand small {
   display: none;
   color: #718096;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .brand-orbit {
@@ -634,8 +893,13 @@ input {
 .page-panel {
   position: relative;
   z-index: 2;
-  width: min(640px, 100%);
+  width: min(800px, 100%);
   margin: 0 auto;
+}
+
+.chat-shell.result-mode {
+  width: min(1000px, 100%);
+  animation: workspace-expand .36s cubic-bezier(.2, .86, .28, 1);
 }
 
 .empty-state {
@@ -671,14 +935,14 @@ input {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin-top: 8px;
-  width: min(420px, 100%);
+  width: min(520px, 100%);
 }
 
 .quick-prompts button,
 .bubble footer button,
 .comment-box button,
 .pick-button {
-  min-height: 38px;
+  min-height: 48px;
   border-radius: 8px;
   background: #eef3f8;
   color: #334155;
@@ -686,13 +950,194 @@ input {
 }
 
 .message-list {
-  height: calc(100svh - 180px);
+  height: calc(100svh - 190px);
   overflow: auto;
   list-style: none;
   margin: 0;
   padding: 16px 0 24px;
   display: grid;
+  gap: 16px;
+}
+
+.step-summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: stretch;
+  margin-bottom: 16px;
+  animation: result-rise .32s ease both;
+}
+
+.step-card-list {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.step-card {
+  min-width: 0;
+  min-height: 76px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  gap: 4px 10px;
+  align-items: center;
+  border-radius: 12px;
+  padding: 12px;
+  background: rgba(255,255,255,.82);
+  color: #1d2436;
+  text-align: left;
+  box-shadow: 0 10px 22px rgba(91, 106, 150, .10);
+  border: 1px solid rgba(226, 232, 240, .78);
+  transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+}
+
+.step-card:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 28px rgba(91, 106, 150, .14);
+}
+
+.step-card span {
+  grid-row: 1 / 3;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: #eef3f8;
+  color: #64748b;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.step-card strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-card small {
+  min-width: 0;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.step-card.done span {
+  background: rgba(22, 93, 255, .10);
+  color: #165dff;
+}
+
+.step-card.current {
+  border-color: rgba(22, 93, 255, .32);
+  box-shadow: 0 14px 30px rgba(22, 93, 255, .12);
+}
+
+.step-card.current span {
+  background: #165dff;
+  color: #fff;
+}
+
+.step-card.pending {
+  opacity: .72;
+}
+
+.summary-share {
+  min-width: 128px;
+  min-height: 76px;
+  border-radius: 12px;
+  padding: 0 18px;
+  background: #165dff;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 900;
+  box-shadow: 0 14px 30px rgba(22, 93, 255, .16);
+  transition: transform .2s ease, box-shadow .2s ease;
+}
+
+.summary-share:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 18px 36px rgba(22, 93, 255, .2);
+}
+
+.result-workspace {
+  display: grid;
+  grid-template-columns: 380px minmax(0, 580px);
+  gap: 24px;
+  align-items: start;
+  animation: result-rise .42s cubic-bezier(.2, .86, .28, 1) both;
+}
+
+.result-plans {
+  max-height: 580px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+  display: grid;
   gap: 14px;
+}
+
+.result-plans::-webkit-scrollbar {
+  width: 8px;
+}
+
+.result-plans::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(148, 163, 184, .45);
+}
+
+.result-plans .plan-card {
+  min-height: 168px;
+  padding: 18px;
+  border-width: 2px;
+}
+
+.result-plans .plan-card strong {
+  font-size: 20px;
+}
+
+.result-plans .timeline-line {
+  font-size: 17px !important;
+  line-height: 1.55;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-plans .plan-meta {
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  font-size: 15px;
+}
+
+.result-plans .plan-card footer button {
+  min-height: 48px;
+  border-radius: 10px;
+  padding: 0 16px;
+  font-size: 15px;
+}
+
+.result-plans .plan-card.active {
+  border-color: #165dff;
+  box-shadow: 0 16px 34px rgba(22, 93, 255, .18);
+}
+
+.result-map {
+  min-width: 0;
+}
+
+.result-map :deep(.trip-map-panel) {
+  margin-top: 0;
+}
+
+.result-map :deep(.map-body) {
+  height: 580px;
 }
 
 .message-row {
@@ -712,14 +1157,15 @@ input {
 }
 
 .bubble {
-  max-width: min(520px, calc(100% - 42px));
+  max-width: min(720px, calc(100% - 42px));
   border-radius: 8px;
-  padding: 12px;
+  padding: 16px;
   background: rgba(255,255,255,.92);
   box-shadow: 0 10px 22px rgba(91, 106, 150, .10);
 }
 
 .message-row.user .bubble {
+  max-width: min(560px, calc(100% - 42px));
   background: #fff;
 }
 
@@ -727,7 +1173,7 @@ input {
   float: right;
   margin-left: 10px;
   color: #94a3b8;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .bubble p {
@@ -757,11 +1203,12 @@ input {
 .plan-stack {
   display: grid;
   gap: 12px;
+  width: 100%;
 }
 
 .plan-card {
   border-radius: 12px;
-  padding: 14px;
+  padding: 16px;
   background: #fff;
   box-shadow: 0 10px 24px rgba(91, 106, 150, .10);
   border: 1px solid transparent;
@@ -783,7 +1230,7 @@ input {
 }
 
 .plan-card strong {
-  font-size: 16px;
+  font-size: 18px;
 }
 
 .plan-card header span {
@@ -791,14 +1238,17 @@ input {
   padding: 4px 8px;
   background: #16a34a;
   color: #fff;
-  font-size: 12px;
+  font-size: 14px;
   white-space: nowrap;
 }
 
 .timeline-line {
   margin: 12px 0 !important;
   color: #334155;
-  font-size: 14px !important;
+  font-size: 16px !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .plan-meta {
@@ -839,12 +1289,32 @@ input {
 
 .clarify-card {
   display: grid;
-  gap: 10px;
+  gap: 16px;
+  width: min(720px, 100%);
+}
+
+.clarify-head strong {
+  display: block;
+  font-size: 18px;
+  line-height: 1.5;
+}
+
+.clarify-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr);
+  gap: 16px;
+  align-items: stretch;
+}
+
+.clarify-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
 }
 
 .clarify-card label {
   display: grid;
-  gap: 4px;
+  gap: 6px;
 }
 
 .clarify-card label span {
@@ -859,10 +1329,104 @@ input {
 }
 
 .clarify-card input {
-  min-height: 40px;
+  min-height: 48px;
+  border-radius: 12px;
+  padding: 0 12px;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px rgba(226, 232, 240, .96);
+  transition: box-shadow .2s ease, background-color .2s ease, transform .2s ease;
+}
+
+.clarify-card input:focus {
+  box-shadow: inset 0 0 0 1px rgba(22, 93, 255, .46), 0 0 0 4px rgba(22, 93, 255, .10);
+  background: #fff;
+}
+
+.clarify-submit {
+  grid-column: 1 / -1;
+  min-height: 48px;
+  border-radius: 12px;
+}
+
+.clarify-presets {
+  display: grid;
+  gap: 8px;
+  align-content: stretch;
+}
+
+.preset-card {
+  position: relative;
+  min-height: 80px;
+  display: grid;
+  align-content: center;
+  gap: 8px;
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: #fff;
+  color: #1d2436;
+  text-align: left;
+  box-shadow: 0 10px 22px rgba(91, 106, 150, .10);
+  transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+  border: 1px solid rgba(226, 232, 240, .82);
+}
+
+.preset-card:hover {
+  transform: scale(1.02);
+  box-shadow: 0 16px 32px rgba(91, 106, 150, .16);
+}
+
+.preset-card.selected {
+  border-color: rgba(22, 93, 255, .46);
+  box-shadow: 0 16px 34px rgba(22, 93, 255, .15);
+}
+
+.preset-card strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.preset-card strong b {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
   border-radius: 8px;
-  padding: 0 10px;
-  background: #f8fafc;
+  background: rgba(22, 93, 255, .10);
+  color: #165dff;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.preset-card small {
+  color: #64748b;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.preset-check {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #165dff;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 900;
+  opacity: 0;
+  transform: scale(.7);
+  transition: opacity .18s ease, transform .18s ease;
+}
+
+.preset-card.selected .preset-check {
+  opacity: 1;
+  transform: scale(1);
 }
 
 .page-panel {
@@ -978,13 +1542,13 @@ input {
   z-index: 20;
   left: 50%;
   bottom: 14px;
-  width: min(640px, calc(100vw - 24px));
+  width: min(800px, calc(100vw - 48px));
   min-height: 72px;
   transform: translateX(-50%);
   border-radius: 16px;
   padding: 12px;
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 48px 48px 92px 64px;
+  grid-template-columns: 28px minmax(0, 1fr) 48px 48px 72px;
   align-items: center;
   gap: 8px;
 }
@@ -1025,6 +1589,24 @@ input {
 @media (max-width: 760px) {
   .chat-app {
     padding: 64px 12px 114px;
+    font-size: 15px;
+  }
+
+  .chat-app:has(.result-mode) {
+    padding-bottom: 24px;
+  }
+
+  .topbar {
+    padding: 0 16px;
+  }
+
+  .chat-shell,
+  .page-panel {
+    width: min(640px, 100%);
+  }
+
+  .chat-shell.result-mode {
+    width: min(640px, 100%);
   }
 
   .meta span {
@@ -1039,17 +1621,62 @@ input {
     height: calc(100svh - 190px);
   }
 
+  .result-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .step-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .step-card-list {
+    grid-template-columns: 1fr;
+  }
+
+  .step-card {
+    min-height: 68px;
+  }
+
+  .summary-share {
+    min-height: 48px;
+  }
+
+  .result-plans {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .result-plans .plan-card {
+    min-height: 0;
+  }
+
+  .result-map :deep(.map-body) {
+    height: 300px;
+  }
+
+  .bubble {
+    max-width: min(520px, calc(100% - 42px));
+    padding: 12px;
+  }
+
+  .message-row.user .bubble {
+    max-width: min(520px, calc(100% - 42px));
+  }
+
+  .clarify-layout,
+  .clarify-form {
+    grid-template-columns: 1fr;
+  }
+
+  .clarify-card {
+    width: 100%;
+  }
+
   .composer {
+    width: min(640px, calc(100vw - 24px));
     grid-template-columns: 24px minmax(0, 1fr) 44px 44px 60px;
     grid-auto-rows: auto;
-  }
-
-  .composer > button:nth-of-type(3) {
-    grid-column: 2 / 5;
-  }
-
-  .composer .primary-button {
-    grid-column: 5;
   }
 }
 
@@ -1066,5 +1693,27 @@ input {
 @keyframes blink {
   0%, 100% { opacity: .25; transform: translateY(0); }
   50% { opacity: 1; transform: translateY(-2px); }
+}
+
+@keyframes workspace-expand {
+  from {
+    opacity: .86;
+    transform: scale(.985);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes result-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 </style>
