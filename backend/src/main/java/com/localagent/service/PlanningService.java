@@ -31,9 +31,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class PlanningService {
-    private static final double MAX_POI_DISTANCE_KM = 12.0;
-    private static final double MAX_ROUTE_DISTANCE_KM = 8.0;
-    private static final double MAX_DIRECT_ROUTE_PREFILTER_KM = 10.5;
+    private static final List<Double> POI_RADIUS_STEPS_KM = List.of(12.0, 18.0, 25.0);
+    private static final double WALKING_ROUTE_LIMIT_KM = 3.0;
+    private static final double MIXED_ROUTE_LIMIT_KM = 10.0;
+    private static final double DRIVING_ROUTE_LIMIT_KM = 25.0;
+    private static final double WALKING_DIRECT_PREFILTER_KM = 4.0;
+    private static final double MIXED_DIRECT_PREFILTER_KM = 12.5;
+    private static final double DRIVING_DIRECT_PREFILTER_KM = 28.0;
     private static final int MAX_ROUTE_ATTEMPTS = 8;
 
     private final PlanSessionRepository planSessionRepository;
@@ -300,7 +304,12 @@ public class PlanningService {
 
     private List<Map<String, Object>> buildOptions(UUID planId, Map<String, Object> intent, List<Poi> candidates,
                                                    Map<String, Object> weather, List<Map<String, Object>> warnings) {
-        List<Poi> nearby = nearbyCandidates(candidates, intent);
+        CandidatePool candidatePool = nearbyCandidates(candidates, intent);
+        List<Poi> nearby = candidatePool.pois();
+        if (candidatePool.expanded()) {
+            warnings.add(warning("已扩大搜索范围",
+                    "附近真实地点不足，已把候选半径放宽到约 " + Math.round(candidatePool.radiusKm()) + " 公里；方案会优先控制路线成本。"));
+        }
         List<String> excludedPois = castStringList(intent.get("excludedPois"));
         nearby = nearby.stream().filter(poi -> !excludedPois.contains(poi.getName())).toList();
         List<Poi> activities = tools.sortCandidates(nearby.stream()
@@ -324,17 +333,24 @@ public class PlanningService {
         int minimumPlanCount = Math.min(3, planCount);
         List<Map<String, Object>> options = new ArrayList<>();
         Set<String> signatures = new HashSet<>();
-        int maxAttempts = Math.min(MAX_ROUTE_ATTEMPTS, Math.max(minimumPlanCount, activities.size() * dining.size()));
+        int maxAttempts = Math.min(MAX_ROUTE_ATTEMPTS,
+                Math.max(minimumPlanCount, activities.size() * dining.size() * Math.max(1, extras.size())));
         for (int attempt = 0; attempt < maxAttempts && options.size() < planCount; attempt++) {
             Poi activity = chooseActivity(planId, activities, attempt % activities.size());
             Poi restaurant = chooseRestaurant(planId, dining, (attempt / Math.max(1, activities.size())) % dining.size());
+            Poi extra = extras.get((attempt / Math.max(1, activities.size() * dining.size())) % extras.size());
             List<Poi> stops = fitStopDurations(buildStops(activities, dining, extras, activity, restaurant, stopCount, attempt),
                     durationMinutes(intent));
+            if (stops.stream().noneMatch(poi -> poi.getName().equals(extra.getName()))
+                    && !extra.getName().equals(activity.getName())
+                    && !extra.getName().equals(restaurant.getName())) {
+                stops = replaceLastNonDiningStop(stops, extra);
+            }
             if (!hasRequiredPoiCoverage(stops)) {
                 tools.recovery(planId, "POI类型不完整", signature(stops), "跳过该候选");
                 continue;
             }
-            if (directRouteDistanceKm(stops) > MAX_DIRECT_ROUTE_PREFILTER_KM) {
+            if (directRouteDistanceKm(stops) > directRoutePrefilterKm(intent)) {
                 tools.recovery(planId, "路线直线距离预筛过远", signature(stops), "跳过该候选");
                 continue;
             }
@@ -345,11 +361,15 @@ public class PlanningService {
 
             Map<String, Object> route = routeEstimateTool.route(planId, stops);
             double distanceKm = ((Number) route.getOrDefault("distanceKm", 0)).doubleValue();
-            if (distanceKm > MAX_ROUTE_DISTANCE_KM) {
+            if (distanceKm > maxRouteDistanceKm(intent)) {
                 tools.recovery(planId, "路线距离过远", signature, "跳过该候选");
                 continue;
             }
             int totalMinutes = tools.totalMinutes(stops, ((Number) route.get("travelMinutes")).intValue());
+            if (isTooShort(intent, totalMinutes)) {
+                stops = extendFlexibleStop(stops, durationMinutes(intent) - totalMinutes);
+                totalMinutes = tools.totalMinutes(stops, ((Number) route.get("travelMinutes")).intValue());
+            }
             if (fitsDuration(intent, totalMinutes)) {
                 options.add(option(options.size() + 1, stops, route, totalMinutes, intent, weather));
             } else {
@@ -393,18 +413,37 @@ public class PlanningService {
         return distance;
     }
 
-    private List<Poi> nearbyCandidates(List<Poi> candidates, Map<String, Object> intent) {
+    private CandidatePool nearbyCandidates(List<Poi> candidates, Map<String, Object> intent) {
         double[] anchor = anchor(intent);
         if (anchor == null) {
-            return candidates.stream()
+            return new CandidatePool(candidates.stream()
                     .filter(poi -> poi.getLng() != 0.0 && poi.getLat() != 0.0)
-                    .toList();
+                    .toList(), 0.0, false);
         }
+        for (double radiusKm : POI_RADIUS_STEPS_KM) {
+            List<Poi> scoped = candidatesWithinRadius(candidates, anchor, radiusKm);
+            if (hasCandidateCoverage(scoped)) {
+                return new CandidatePool(scoped, radiusKm, radiusKm > POI_RADIUS_STEPS_KM.get(0));
+            }
+        }
+        double radiusKm = POI_RADIUS_STEPS_KM.get(POI_RADIUS_STEPS_KM.size() - 1);
+        return new CandidatePool(candidatesWithinRadius(candidates, anchor, radiusKm), radiusKm, true);
+    }
+
+    private List<Poi> candidatesWithinRadius(List<Poi> candidates, double[] anchor, double radiusKm) {
         return candidates.stream()
                 .filter(poi -> poi.getLng() != 0.0 && poi.getLat() != 0.0)
-                .filter(poi -> distanceKm(anchor[1], anchor[0], poi.getLat(), poi.getLng()) <= MAX_POI_DISTANCE_KM)
+                .filter(poi -> distanceKm(anchor[1], anchor[0], poi.getLat(), poi.getLng()) <= radiusKm)
                 .sorted(Comparator.comparingDouble(poi -> distanceKm(anchor[1], anchor[0], poi.getLat(), poi.getLng())))
                 .toList();
+    }
+
+    private boolean hasCandidateCoverage(List<Poi> candidates) {
+        long activityCount = candidates.stream()
+                .filter(poi -> poi.getType() == PoiType.ENTERTAINMENT || poi.getType() == PoiType.CULTURE)
+                .count();
+        long diningCount = candidates.stream().filter(poi -> poi.getType() == PoiType.DINING).count();
+        return activityCount >= 2 && diningCount >= 1 && candidates.size() >= 4;
     }
 
     private int planCount(Map<String, Object> intent) {
@@ -436,6 +475,15 @@ public class PlanningService {
         }
         int tolerance = Math.max(30, duration / 5);
         return totalMinutes >= duration - tolerance && totalMinutes <= duration + tolerance;
+    }
+
+    private boolean isTooShort(Map<String, Object> intent, int totalMinutes) {
+        int duration = durationMinutes(intent);
+        if (duration <= 0) {
+            return false;
+        }
+        int tolerance = Math.max(30, duration / 5);
+        return totalMinutes < duration - tolerance;
     }
 
     private double durationScore(Map<String, Object> intent, int totalMinutes) {
@@ -473,9 +521,8 @@ public class PlanningService {
         if (tools.hasTicket(planId, activity)) {
             return activity;
         }
-        Poi replacement = activities.stream().filter(poi -> !poi.isTicketProblem()).findFirst().orElse(activity);
-        tools.recovery(planId, "票务不可用", activity.getName(), replacement.getName());
-        return replacement;
+        tools.recovery(planId, "\u7968\u52a1\u4e0d\u53ef\u7528", activity.getName(), "\u4fdd\u7559\u5019\u9009\u5e76\u63d0\u793a\u98ce\u9669");
+        return activity;
     }
 
     private Poi chooseRestaurant(UUID planId, List<Poi> dining, int offset) {
@@ -486,9 +533,8 @@ public class PlanningService {
         if (tools.hasSeat(planId, restaurant)) {
             return restaurant;
         }
-        Poi replacement = dining.stream().filter(poi -> !poi.isSeatProblem()).findFirst().orElse(restaurant);
-        tools.recovery(planId, "座位不可用", restaurant.getName(), replacement.getName());
-        return replacement;
+        tools.recovery(planId, "\u5ea7\u4f4d\u4e0d\u53ef\u7528", restaurant.getName(), "\u4fdd\u7559\u5019\u9009\u5e76\u63d0\u793a\u98ce\u9669");
+        return restaurant;
     }
 
     private List<Poi> buildStops(List<Poi> activities, List<Poi> dining, List<Poi> extras, Poi activity,
@@ -520,8 +566,38 @@ public class PlanningService {
         return extras.get((offset + 1) % extras.size());
     }
 
+    private List<Poi> replaceLastNonDiningStop(List<Poi> stops, Poi replacement) {
+        if (stops.isEmpty()) {
+            return stops;
+        }
+        List<Poi> adjusted = new ArrayList<>(stops);
+        for (int i = adjusted.size() - 1; i >= 0; i--) {
+            if (adjusted.get(i).getType() != PoiType.DINING) {
+                adjusted.set(i, replacement);
+                return adjusted;
+            }
+        }
+        return adjusted;
+    }
+
     private Poi extendedPoi(Poi original, int extraMinutes) {
         return poiWithDuration(original, original.getDurationMinutes() + Math.max(0, extraMinutes));
+    }
+
+    private List<Poi> extendFlexibleStop(List<Poi> stops, int extraMinutes) {
+        if (extraMinutes <= 0 || stops.isEmpty()) {
+            return stops;
+        }
+        int index = 0;
+        for (int i = stops.size() - 1; i >= 0; i--) {
+            if (stops.get(i).getType() != PoiType.DINING) {
+                index = i;
+                break;
+            }
+        }
+        List<Poi> adjusted = new ArrayList<>(stops);
+        adjusted.set(index, extendedPoi(adjusted.get(index), extraMinutes));
+        return adjusted;
     }
 
     private List<Poi> fitStopDurations(List<Poi> stops, int durationMinutes) {
@@ -599,7 +675,7 @@ public class PlanningService {
         // 归一化评分：三项各占 0-40/0-20/0-40，总分 0-100
         double ratingScore = stops.stream().mapToDouble(Poi::getRating).average().orElse(4.0) / 5.0 * 40.0;
         double durScore = durationScore(intent, totalMinutes);
-        double distScore = Math.max(0, 1.0 - distanceKm / MAX_ROUTE_DISTANCE_KM) * 40.0;
+        double distScore = Math.max(0, 1.0 - distanceKm / maxRouteDistanceKm(intent)) * 40.0;
         double score = ratingScore + durScore + distScore;
 
         Map<String, Object> option = new LinkedHashMap<>();
@@ -711,6 +787,40 @@ public class PlanningService {
         return null;
     }
 
+    private double maxRouteDistanceKm(Map<String, Object> intent) {
+        return switch (transportProfile(intent)) {
+            case "walking" -> WALKING_ROUTE_LIMIT_KM;
+            case "driving" -> DRIVING_ROUTE_LIMIT_KM;
+            default -> MIXED_ROUTE_LIMIT_KM;
+        };
+    }
+
+    private double directRoutePrefilterKm(Map<String, Object> intent) {
+        return switch (transportProfile(intent)) {
+            case "walking" -> WALKING_DIRECT_PREFILTER_KM;
+            case "driving" -> DRIVING_DIRECT_PREFILTER_KM;
+            default -> MIXED_DIRECT_PREFILTER_KM;
+        };
+    }
+
+    private String transportProfile(Map<String, Object> intent) {
+        String text = String.join(" ",
+                String.valueOf(intent.getOrDefault("rawMessage", "")),
+                String.valueOf(intent.getOrDefault("stopCountPreference", "")),
+                String.valueOf(intent.getOrDefault("soft_preferences", "")),
+                String.valueOf(intent.getOrDefault("hard_constraints", "")),
+                String.valueOf(castMap(intent.get("userFacts")).getOrDefault("answers", "")));
+        if (text.contains("\u5168\u7a0b\u6b65\u884c") || text.contains("\u53ea\u6b65\u884c")
+                || text.contains("\u7eaf\u6b65\u884c") || text.contains("\u4e0d\u8981\u6253\u8f66")) {
+            return "walking";
+        }
+        if (text.contains("\u5f00\u8f66") || text.contains("\u81ea\u9a7e") || text.contains("\u6253\u8f66")
+                || text.contains("\u7f51\u7ea6\u8f66") || text.contains("\u8de8\u533a") || text.contains("\u8fdc\u4e00\u70b9")) {
+            return "driving";
+        }
+        return "mixed";
+    }
+
     private String extractExcludedPoi(String message, Map<String, Object> previousOption) {
         String text = message == null ? "" : message;
         if (!(text.contains("不喜欢") || text.contains("关门") || text.contains("换掉") || text.contains("不要")
@@ -756,6 +866,8 @@ public class PlanningService {
                 * Math.sin(dLng / 2) * Math.sin(dLng / 2);
         return radius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     }
+
+    private record CandidatePool(List<Poi> pois, double radiusKm, boolean expanded) {}
 
     @SuppressWarnings("unchecked")
     private double[] anchor(Map<String, Object> intent) {

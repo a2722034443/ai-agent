@@ -2,10 +2,12 @@ package com.localagent.controller;
 
 import com.localagent.dto.ApiDtos.ConfirmRequest;
 import com.localagent.dto.ApiDtos.FeedbackRequest;
+import com.localagent.dto.ApiDtos.NearbyPoiRequest;
 import com.localagent.dto.ApiDtos.PlanRequest;
 import com.localagent.dto.ApiDtos.PlanResponse;
 import com.localagent.dto.ApiDtos.SessionRequest;
 import com.localagent.dto.ApiDtos.SessionResponse;
+import com.localagent.service.AmapPoiSearchTool;
 import com.localagent.service.PlanBlockedException;
 import com.localagent.service.PlanningService;
 import com.localagent.service.SessionAuthException;
@@ -29,10 +31,13 @@ import org.springframework.web.bind.annotation.RestController;
 public class ApiController {
     private final SessionService sessionService;
     private final PlanningService planningService;
+    private final AmapPoiSearchTool poiSearchTool;
 
-    public ApiController(SessionService sessionService, PlanningService planningService) {
+    public ApiController(SessionService sessionService, PlanningService planningService,
+                         AmapPoiSearchTool poiSearchTool) {
         this.sessionService = sessionService;
         this.planningService = planningService;
+        this.poiSearchTool = poiSearchTool;
     }
 
     @PostMapping("/sessions")
@@ -44,6 +49,13 @@ public class ApiController {
     public PlanResponse createPlan(@RequestHeader("X-Session-Token") String token, @RequestBody PlanRequest request) {
         sessionService.validate(token);
         return planningService.createPlan(token, request);
+    }
+
+    @PostMapping("/nearby-pois")
+    public Map<String, Object> nearbyPois(@RequestHeader("X-Session-Token") String token,
+                                          @RequestBody NearbyPoiRequest request) {
+        sessionService.validate(token);
+        return poiSearchTool.nearbyPois(request);
     }
 
     @GetMapping("/plans/{id}")

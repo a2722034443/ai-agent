@@ -26,7 +26,9 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class AmapRouteEstimateTool {
-    private static final String DIRECTION_PATH = "/v3/direction/bicycling";
+    private static final String WALKING_PATH = "/v3/direction/walking";
+    private static final String BICYCLING_PATH = "/v3/direction/bicycling";
+    private static final String DRIVING_PATH = "/v3/direction/driving";
 
     private final ExternalClientProperties properties;
     private final MockTools mockTools;
@@ -69,7 +71,7 @@ public class AmapRouteEstimateTool {
                 futures.add(CompletableFuture.supplyAsync(
                     () -> {
                         try {
-                            return walkingSegment(planId, from, to, segmentCache);
+                            return routeSegment(planId, from, to, segmentCache);
                         } catch (Exception e) {
                             return Map.of();
                         }
@@ -82,29 +84,32 @@ public class AmapRouteEstimateTool {
             int totalSeconds = 0;
             double distanceKm = 0.0;
             List<Integer> segmentMinutes = new ArrayList<>();
+            List<String> routeModes = new ArrayList<>();
             for (CompletableFuture<Map<String, Object>> f : futures) {
                 Map<String, Object> segment = f.getNow(Map.of());
                 int seconds = ((Number) segment.getOrDefault("durationSeconds", 0)).intValue();
                 totalSeconds += seconds;
                 distanceKm += ((Number) segment.getOrDefault("distanceMeters", 0)).doubleValue() / 1000.0;
                 segmentMinutes.add(seconds / 60);
+                routeModes.add(String.valueOf(segment.getOrDefault("routeMode", "unknown")));
             }
             int travelMinutes = totalSeconds / 60;
 
             if (travelMinutes <= 0 || distanceKm <= 0.0) {
-                return blockOrMock(planId, stops, "empty_route", DIRECTION_PATH);
+                return blockOrMock(planId, stops, "empty_route", BICYCLING_PATH);
             }
             Map<String, Object> output = new LinkedHashMap<>(traceService.externalMeta(
-                    "amap", "real", properties.getAmap().getBaseUrl() + DIRECTION_PATH, "ok"));
+                    "amap", "real", properties.getAmap().getBaseUrl() + BICYCLING_PATH, "ok"));
             output.put("travelMinutes", travelMinutes);
             output.put("distanceKm", Math.round(distanceKm * 10.0) / 10.0);
             output.put("segmentMinutes", segmentMinutes);
-            output.put("source", "amap_bicycling_direction");
+            output.put("routeModes", routeModes);
+            output.put("source", "amap_dynamic_direction");
             traceService.trace(planId, "AmapRouteEstimateTool", "ok", System.currentTimeMillis(),
                     Map.of("stops", stops.stream().map(Poi::getName).toList()), output);
             return output;
         } catch (Exception e) {
-            return blockOrMock(planId, stops, e.getClass().getSimpleName() + ": " + e.getMessage(), DIRECTION_PATH);
+            return blockOrMock(planId, stops, e.getClass().getSimpleName() + ": " + e.getMessage(), BICYCLING_PATH);
         }
     }
 
@@ -114,8 +119,8 @@ public class AmapRouteEstimateTool {
         }
     }
 
-    private Map<String, Object> walkingSegment(UUID planId, Poi from, Poi to,
-                                               Map<String, Map<String, Object>> segmentCache) throws Exception {
+    private Map<String, Object> routeSegment(UUID planId, Poi from, Poi to,
+                                             Map<String, Map<String, Object>> segmentCache) throws Exception {
         String cacheKey = segmentKey(from, to);
         Map<String, Object> cached = segmentCache.get(cacheKey);
         if (cached != null) {
@@ -123,7 +128,8 @@ public class AmapRouteEstimateTool {
         }
         long start = System.currentTimeMillis();
         ExternalClientProperties.Amap amap = properties.getAmap();
-        String sourceUrl = amap.getBaseUrl() + DIRECTION_PATH;
+        RouteMode mode = routeMode(from, to);
+        String sourceUrl = amap.getBaseUrl() + mode.path();
         URI uri = URI.create(sourceUrl + "?key=" + encode(amap.getWebServiceKey())
                 + "&origin=" + encode(from.getLng() + "," + from.getLat())
                 + "&destination=" + encode(to.getLng() + "," + to.getLat()));
@@ -158,9 +164,10 @@ public class AmapRouteEstimateTool {
         output.put("to", to.getName());
         output.put("durationSeconds", durationSeconds);
         output.put("distanceMeters", distanceMeters);
+        output.put("routeMode", mode.name());
         output.put("info", body.getOrDefault("info", ""));
         traceService.trace(planId, "AmapRouteEstimateTool", durationSeconds > 0 ? "ok" : "empty", start,
-                Map.of("from", from.getName(), "to", to.getName()), output);
+                Map.of("from", from.getName(), "to", to.getName(), "routeMode", mode.name()), output);
         if (durationSeconds > 0 && distanceMeters > 0) {
             segmentCache.put(cacheKey, output);
         }
@@ -168,7 +175,7 @@ public class AmapRouteEstimateTool {
     }
 
     private String segmentKey(Poi from, Poi to) {
-        return from.getLng() + "," + from.getLat() + "->" + to.getLng() + "," + to.getLat();
+        return routeMode(from, to).name() + ":" + from.getLng() + "," + from.getLat() + "->" + to.getLng() + "," + to.getLat();
     }
 
     private Map<String, Object> blockOrMock(UUID planId, List<Poi> stops, String reason, String sourceUrl) {
@@ -218,4 +225,27 @@ public class AmapRouteEstimateTool {
         return "10021".equals(String.valueOf(body.getOrDefault("infocode", "")))
                 || String.valueOf(body.getOrDefault("info", "")).contains("CUQPS");
     }
+
+    private RouteMode routeMode(Poi from, Poi to) {
+        double distanceKm = directDistanceKm(from, to);
+        if (distanceKm <= 1.0) {
+            return new RouteMode("walking", WALKING_PATH);
+        }
+        if (distanceKm <= 5.0) {
+            return new RouteMode("bicycling", BICYCLING_PATH);
+        }
+        return new RouteMode("driving", DRIVING_PATH);
+    }
+
+    private double directDistanceKm(Poi from, Poi to) {
+        double radius = 6371.0;
+        double dLat = Math.toRadians(to.getLat() - from.getLat());
+        double dLng = Math.toRadians(to.getLng() - from.getLng());
+        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2)
+                + Math.cos(Math.toRadians(from.getLat())) * Math.cos(Math.toRadians(to.getLat()))
+                * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+        return radius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    private record RouteMode(String name, String path) {}
 }

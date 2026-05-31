@@ -9,6 +9,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.localagent.service.MimoClient;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -86,6 +87,35 @@ class ApiControllerTest {
                 .andExpect(jsonPath("$.trace[?(@.tool=='AmapWeatherTool')]").doesNotExist())
                 .andExpect(jsonPath("$.trace[?(@.tool=='WebSearchTool')]").doesNotExist())
                 .andExpect(jsonPath("$.trace[?(@.tool=='AmapRouteEstimateTool')]").doesNotExist());
+    }
+
+    @Test
+    void durationClarificationExplainsStartTimeWasRecognized() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+        when(mimoClient.complete(anyString(), anyString())).thenThrow(new IllegalStateException("fast fallback"));
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = extractJsonString(sessionResult, "token");
+
+        String message = "今天晚上 7 点在上海静安寺附近，4 个朋友，预算 800 元，想先找一个有意思的地方再吃饭，路线不要太折腾。";
+        mockMvc.perform(post("/api/plans")
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "message", message,
+                                "planCount", 3,
+                                "stopCountPreference", "标准"
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
+                .andExpect(jsonPath("$.intent.time_window.start").value("19:00"))
+                .andExpect(jsonPath("$.clarification.fields[0].key").value("duration"))
+                .andExpect(jsonPath("$.clarification.fields[0].question").value("已识别开始时间 19:00，还需要知道大概玩多久，或者最晚几点结束。"));
     }
 
     @Test
@@ -246,7 +276,7 @@ class ApiControllerTest {
                 .andExpect(jsonPath("$.clarification.fields[?(@.key=='timeWindow')]").exists())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
                         .string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("大连"))))
-                .andExpect(jsonPath("$.trace[?(@.tool=='ClarificationAgent' && @.mode=='real')]").exists())
+                .andExpect(jsonPath("$.trace[?(@.tool=='ClarificationAgent' && @.mode=='rule')]").exists())
                 .andExpect(jsonPath("$.clarification.fields[0].allowCustom").value(true))
                 .andExpect(jsonPath("$.trace[?(@.tool=='ClarificationAgent')]").exists());
     }

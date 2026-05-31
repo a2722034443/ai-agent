@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <main class="instant-app">
     <div class="sky" aria-hidden="true">
       <span v-for="star in stars" :key="star.id" class="star" :style="star.style"></span>
@@ -98,16 +98,18 @@
           <span>{{ planet.short }}</span>
         </button>
         <button
-          v-for="tag in planet.tags"
-          :key="`${planet.name}-${tag.text}`"
-          class="tag-dot"
+          v-for="tag in displayTags(planet)"
+          :key="`${planet.name}-${tag.text}-${tag.distanceMeters || 0}`"
+          :class="['tag-dot', { real: tag.real }]"
           type="button"
           :style="{ left: `${tag.x}px`, top: `${tag.y}px` }"
-          @click="quickFill(planet, tag.text)"
+          :title="tag.address || tag.text"
+          @click="quickFill(planet, tag)"
         >
-          {{ tag.text }}
+          <span>{{ tag.text }}</span>
+          <small v-if="tag.real">{{ formatDistance(tag.distanceMeters) }}</small>
         </button>
-        <button class="more-dot" type="button" @click="quickFill(planet, planet.name)">...</button>
+        <button class="more-dot" type="button" @click="quickFill(planet, { text: planet.name })">...</button>
       </article>
     </section>
 
@@ -148,6 +150,13 @@
       </div>
 
       <div v-if="activeDock === 'home'" class="drawer-grid">
+        <article class="mini-card location-card">
+          <strong>{{ locationTitle }}</strong>
+          <p>{{ locationSubtitle }}</p>
+          <button type="button" :disabled="nearbyLoading" @click="requestNearbyPois">
+            {{ nearbyLoading ? '读取中' : '刷新' }}
+          </button>
+        </article>
         <article v-for="item in recommendationCards" :key="item.title" class="mini-card">
           <strong>{{ item.title }}</strong>
           <p>{{ item.text }}</p>
@@ -196,7 +205,7 @@
       <section v-if="clarificationFields.length" class="clarify-box">
         <div class="clarify-header">
           <span class="clarify-icon">✦</span>
-          <h3>{{ clarification.message || '还需要补齐关键信息' }}</h3>
+          <h3>{{ clarification.message || '还需要补充信息' }}</h3>
         </div>
         <article v-for="field in clarificationFields" :key="field.key" class="clarify-field">
           <div class="field-label">
@@ -214,10 +223,10 @@
               {{ choice }}
             </button>
           </div>
-          <input v-model="clarificationAnswers[field.key]" :placeholder="field.expectedAnswerHint || '也可以直接输入你的答案'" />
+          <input v-model="clarificationAnswers[field.key]" :placeholder="field.expectedAnswerHint || '输入自定义答案'" />
         </article>
         <button class="primary-button clarify-submit" type="button" :disabled="loading" @click="submitClarification">
-          {{ loading ? '生成中…' : '补齐后生成方案' }}
+          {{ loading ? '生成中' : '生成方案' }}
         </button>
       </section>
 
@@ -235,13 +244,13 @@
               <p>{{ option.tagline || '基于真实周边地点生成' }}</p>
             </div>
             <button class="confirm-btn" type="button" :disabled="loading" @click.stop="confirm(option.rank)">
-              {{ loading && selectedRank === option.rank ? '…' : '出发' }}
+              {{ loading && selectedRank === option.rank ? '...' : '确认' }}
             </button>
           </div>
           <div class="plan-stats">
-            <span>⏱ {{ formatHours(option.totalMinutes) }}</span>
-            <span>💰 {{ formatMoney(option.budgetEstimate) }}</span>
-            <span>📍 {{ option.route?.distanceKm || '-' }}km</span>
+            <span>时长 {{ formatHours(option.totalMinutes) }}</span>
+            <span>预算 {{ formatMoney(option.budgetEstimate) }}</span>
+            <span>距离 {{ option.route?.distanceKm || '-' }}km</span>
           </div>
           <ol v-if="option.timeline?.length" class="timeline">
             <li v-for="(stop, idx) in option.timeline" :key="idx" :class="['tl-item', stop.type === '餐饮' ? 'dining' : 'activity']">
@@ -255,7 +264,7 @@
           </ol>
         </article>
         <label class="feedback-line">
-          <input v-model="feedback" placeholder="例如：预算太高、太远了、换一家餐厅" />
+          <input v-model="feedback" placeholder="调整预算、距离、餐厅或节奏" />
           <button type="button" :disabled="!feedback.trim() || loading" @click="adjustPlan">调整</button>
         </label>
       </section>
@@ -271,7 +280,7 @@
     </section>
 
     <footer class="composer glass">
-      <button class="brand-orbit footer-orbit" type="button" @click="setDock('home')" aria-label="立刻游"></button>
+      <button class="brand-orbit footer-orbit" type="button" @click="setDock('home')" aria-label="home"></button>
       <label class="command-input">
         <input
           v-model="message"
@@ -290,8 +299,16 @@
       <button type="button" :class="{ active: toolMenuOpen }" @click="toolMenuOpen = !toolMenuOpen">
         <span>更多</span>
       </button>
+      <label class="density-select">
+        <span>站点</span>
+        <select v-model="stopCountPreference">
+          <option value="简洁">简洁</option>
+          <option value="标准">标准</option>
+          <option value="丰富">丰富</option>
+        </select>
+      </label>
       <button class="primary-button" type="button" :disabled="!message.trim() || loading" @click="plan">
-        {{ loading ? '规划中' : '出发' }}
+        {{ loading ? '规划中' : '规划' }}
       </button>
       <input ref="fileInput" class="hidden-file" type="file" accept="image/*" @change="handleImagePick" />
       <div v-if="toolMenuOpen" class="tool-popover">
@@ -314,8 +331,8 @@
 </template>
 
 <script setup>
-import { computed, nextTick, ref } from 'vue'
-import { confirmPlan, createPlan, createSession, sendFeedback } from './api.js'
+import { computed, nextTick, onMounted, ref } from 'vue'
+import { confirmPlan, createPlan, createSession, getSessionToken, nearbyPois, sendFeedback } from './api.js'
 
 const token = ref(localStorage.getItem('lla_token') || '')
 const searchText = ref('')
@@ -343,12 +360,19 @@ const compactMap = ref(false)
 const legendOpen = ref(false)
 const zoomLevel = ref(1)
 const fileInput = ref(null)
+const stopCountPreference = ref('标准')
+const nearbyLoading = ref(false)
+const nearbyError = ref('')
+const userLocation = ref(null)
+const nearbyTags = ref({})
 
 const planets = [
   {
     name: '美食餐饮',
     short: '美食',
     className: 'food',
+    key: 'food',
+    keyword: '餐厅|火锅|咖啡|小吃',
     color: '#ff9a3d',
     soft: 'rgba(255, 154, 61, .22)',
     x: 30,
@@ -365,6 +389,8 @@ const planets = [
     name: '亲子玩乐',
     short: '亲子',
     className: 'kids',
+    key: 'kids',
+    keyword: '儿童乐园|亲子|博物馆|科技馆',
     color: '#54cdb5',
     soft: 'rgba(84, 205, 181, .23)',
     x: 70,
@@ -381,6 +407,8 @@ const planets = [
     name: '休闲娱乐',
     short: '娱乐',
     className: 'fun',
+    key: 'fun',
+    keyword: '展览|密室|KTV|桌游',
     color: '#ef9bd0',
     soft: 'rgba(239, 155, 208, .24)',
     x: 70,
@@ -397,6 +425,8 @@ const planets = [
     name: '商圈逛街',
     short: '商圈',
     className: 'mall',
+    key: 'mall',
+    keyword: '商场|市集|书店|网红店',
     color: '#78a7ff',
     soft: 'rgba(120, 167, 255, .26)',
     x: 30,
@@ -413,6 +443,8 @@ const planets = [
     name: '好友聚会',
     short: '聚会',
     className: 'party',
+    key: 'party',
+    keyword: '烧烤|聚餐|酒吧|夜宵',
     color: '#ffd37e',
     soft: 'rgba(255, 211, 126, .26)',
     x: 42,
@@ -429,6 +461,8 @@ const planets = [
     name: '运动休闲',
     short: '运动',
     className: 'sport',
+    key: 'sport',
+    keyword: '公园|健身|骑行|运动馆',
     color: '#73bcff',
     soft: 'rgba(115, 188, 255, .27)',
     x: 50,
@@ -517,6 +551,16 @@ const savedCards = [
 const clarificationFields = computed(() => clarification.value?.fields || [])
 const activePlanetLabel = computed(() => activePlanet.value?.name || '我的位置')
 const placeholderText = computed(() => inputFocused.value ? '输入地点、预算、同行人和想玩的内容...' : '记录此刻的想法、目的地、预算...')
+const locationTitle = computed(() => {
+  if (nearbyLoading.value) return '正在读取附近真实地点'
+  if (userLocation.value) return '已按你的位置搜索'
+  return '需要定位后显示真实门店'
+})
+const locationSubtitle = computed(() => {
+  if (nearbyError.value) return nearbyError.value
+  if (userLocation.value) return '星图词条会优先显示高德周边搜索到的店名和距离。'
+  return '允许浏览器定位后，吃饭、娱乐等词条会替换成附近实体店。'
+})
 const drawerKicker = computed(() => activeDock.value === 'home' ? activePlanetLabel.value : dockItems.find(item => item.key === activeDock.value)?.label)
 const drawerTitle = computed(() => {
   if (loading.value) return '正在整理你的短时出行方案'
@@ -553,9 +597,69 @@ function focusPlanet(name) {
   drawerVisible.value = true
 }
 
+function displayTags(planet) {
+  const realTags = nearbyTags.value[planet.key] || []
+  if (!realTags.length) return planet.tags
+  return realTags.map((poi, index) => ({
+    ...poi,
+    real: true,
+    text: poi.name,
+    x: planet.tags[index % planet.tags.length]?.x || 0,
+    y: planet.tags[index % planet.tags.length]?.y || 0
+  }))
+}
+
 function quickFill(planet, tag) {
   focusPlanet(planet.name)
-  message.value = `我在当前位置附近，想安排${planet.name}，重点考虑${tag}，预算和时间请先帮我澄清。`
+  const poi = typeof tag === 'string' ? { text: tag } : tag
+  const distance = poi.distanceMeters ? `，距离约 ${formatDistance(poi.distanceMeters)}` : ''
+  const address = poi.address ? `，地址 ${poi.address}` : ''
+  message.value = `我在当前位置附近，想围绕${poi.text}${distance}${address}安排${planet.name}，请使用真实地点并结合时间、预算和路线约束。`
+}
+
+async function requestNearbyPois() {
+  if (nearbyLoading.value) return
+  nearbyLoading.value = true
+  nearbyError.value = ''
+  try {
+    const position = await browserLocation()
+    userLocation.value = {
+      lng: position.coords.longitude,
+      lat: position.coords.latitude
+    }
+    await ensureSession()
+    const data = await nearbyPois({
+      lng: userLocation.value.lng,
+      lat: userLocation.value.lat,
+      radius: 3000,
+      categories: planets.map(planet => ({
+        key: planet.key,
+        label: planet.name,
+        keyword: planet.keyword,
+        limit: 4
+      }))
+    })
+    nearbyTags.value = data.categories || {}
+    token.value = getSessionToken()
+  } catch (err) {
+    nearbyError.value = err.message || '附近地点读取失败。'
+  } finally {
+    nearbyLoading.value = false
+  }
+}
+
+function browserLocation() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error('当前浏览器不支持定位。'))
+      return
+    }
+    navigator.geolocation.getCurrentPosition(resolve, () => reject(new Error('定位失败，请检查浏览器权限。')), {
+      enableHighAccuracy: false,
+      timeout: 6000,
+      maximumAge: 300000
+    })
+  })
 }
 
 function applySearch() {
@@ -590,7 +694,11 @@ function toggleVoice() {
 }
 
 async function ensureSession() {
-  if (token.value) return
+  const existingToken = getSessionToken()
+  if (existingToken) {
+    token.value = existingToken
+    return
+  }
   const data = await createSession('立刻游用户')
   token.value = data.token
 }
@@ -611,10 +719,11 @@ async function plan() {
     const data = await createPlan({
       message: message.value,
       planCount: 3,
-      stopCountPreference: '标准'
+      stopCountPreference: stopCountPreference.value
     })
     loadingStep.value = 3
     applyPlan(data)
+    token.value = getSessionToken()
   } catch (err) {
     handleRequestError(err)
   } finally {
@@ -632,11 +741,12 @@ async function submitClarification() {
     const data = await createPlan({
       message: message.value,
       planCount: 3,
-      stopCountPreference: '标准',
+      stopCountPreference: stopCountPreference.value,
       clarificationAnswers: clarificationAnswers.value,
       previousPlanId: currentPlanId.value || null
     })
     applyPlan(data)
+    token.value = getSessionToken()
   } catch (err) {
     handleRequestError(err)
   } finally {
@@ -652,6 +762,7 @@ async function confirm(rank) {
   try {
     const data = await confirmPlan(currentPlanId.value, rank)
     applyPlan(data)
+    token.value = getSessionToken()
     execution.value = data.execution
   } catch (err) {
     handleRequestError(err)
@@ -667,6 +778,7 @@ async function adjustPlan() {
   try {
     const data = await sendFeedback(currentPlanId.value, feedback.value)
     applyPlan(data)
+    token.value = getSessionToken()
     feedback.value = ''
   } catch (err) {
     handleRequestError(err)
@@ -712,6 +824,17 @@ function formatMoney(value) {
   if (value === undefined || value === null || value === '') return '预算待确认'
   return `约 ${value} 元`
 }
+
+function formatDistance(meters) {
+  const value = Number(meters || 0)
+  if (value <= 0) return '-'
+  if (value >= 1000) return `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)}km`
+  return `${Math.round(value)}m`
+}
+
+onMounted(() => {
+  requestNearbyPois()
+})
 </script>
 
 <style scoped>
@@ -1236,6 +1359,29 @@ button:disabled {
   transition: transform .18s ease, opacity .18s ease;
 }
 
+.tag-dot.real {
+  min-width: clamp(108px, 7vw, 148px);
+  min-height: 42px;
+  display: grid;
+  align-content: center;
+  gap: 1px;
+  text-align: left;
+}
+
+.tag-dot span {
+  display: block;
+  max-width: 132px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tag-dot small {
+  display: block;
+  font-size: 11px;
+  line-height: 1.1;
+  color: rgba(29,36,54,.62);
+}
+
 .more-dot {
   right: -46px;
   bottom: -18px;
@@ -1630,7 +1776,7 @@ button:disabled {
   line-height: 1.6;
 }
 
-/* loading 步骤提示 */
+/* loading 进度提示 */
 .loading-steps {
   display: flex;
   align-items: center;
@@ -1720,7 +1866,7 @@ button:disabled {
   bottom: 96px;
   min-height: 96px;
   display: grid;
-  grid-template-columns: 88px minmax(240px, 1fr) 72px 72px 72px 92px;
+  grid-template-columns: 88px minmax(240px, 1fr) 72px 72px 72px 88px 92px;
   align-items: center;
   gap: 16px;
   border-radius: 28px;
@@ -1769,6 +1915,31 @@ button:disabled {
 
 .composer > button.active {
   background: rgba(74, 118, 255, .20);
+}
+
+.density-select {
+  height: 58px;
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: rgba(255,255,255,.46);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.82);
+  display: grid;
+  align-content: center;
+  gap: 1px;
+}
+
+.density-select span {
+  font-size: 11px;
+  color: rgba(29,36,54,.55);
+}
+
+.density-select select {
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #1e4a88;
+  font-weight: 800;
+  font: inherit;
 }
 
 .hidden-file {
@@ -1984,7 +2155,7 @@ button:disabled {
 
   .composer {
     grid-area: composer;
-    grid-template-columns: 72px minmax(260px, 1fr) 64px 64px 64px 92px;
+    grid-template-columns: 72px minmax(260px, 1fr) 64px 64px 64px 86px 92px;
     min-height: 84px;
     padding: 14px 22px;
   }
@@ -2107,7 +2278,7 @@ button:disabled {
     right: auto;
     bottom: auto;
     width: 100%;
-    grid-template-columns: 64px minmax(0, 1fr) repeat(3, 58px) 84px;
+    grid-template-columns: 64px minmax(0, 1fr) repeat(3, 58px) 82px 84px;
     min-height: 76px;
     padding: 10px 14px;
   }
@@ -2309,6 +2480,7 @@ button:disabled {
 
   .footer-orbit,
   .command-input,
+  .density-select,
   .composer .primary-button {
     grid-column: 1 / -1;
   }
@@ -2356,3 +2528,7 @@ button:disabled {
   }
 }
 </style>
+
+
+
+

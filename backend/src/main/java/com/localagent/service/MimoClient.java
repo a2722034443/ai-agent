@@ -33,29 +33,20 @@ public class MimoClient {
     public String complete(String systemPrompt, String userPrompt) {
         ExternalClientProperties.Llm llm = properties.getLlm();
         if (!llm.isEnabled() || isBlank(llm.getApiKey())) {
-            throw new IllegalStateException("MiMo API 未配置");
+            throw new IllegalStateException("MiMo API not configured");
         }
-        Exception lastError = null;
-        for (int attempt = 0; attempt < 2; attempt++) {
-            try {
-                return completeOnce(systemPrompt, userPrompt);
-            } catch (Exception e) {
-                lastError = e;
-                if (attempt == 0 && isRetryable(e)) {
-                    sleep(800L);
-                    continue;
-                }
-                break;
-            }
+        try {
+            return completeOnce(systemPrompt, userPrompt);
+        } catch (Exception e) {
+            throw new IllegalStateException(e.getMessage(), e);
         }
-        throw new IllegalStateException(lastError == null ? "MiMo API 调用失败" : lastError.getMessage(), lastError);
     }
 
     private String completeOnce(String systemPrompt, String userPrompt) throws Exception {
         ExternalClientProperties.Llm llm = properties.getLlm();
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", llm.getModel());
-        body.put("max_completion_tokens", Math.max(4096, llm.getMaxTokens()));
+        body.put("max_completion_tokens", Math.max(2048, llm.getMaxTokens()));
         body.put("temperature", llm.getTemperature());
         body.put("top_p", 0.95);
         body.put("stream", false);
@@ -73,17 +64,17 @@ public class MimoClient {
                 .build();
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         if (response.statusCode() >= 400) {
-            throw new IllegalStateException("MiMo API 状态码异常：" + response.statusCode());
+            throw new IllegalStateException("MiMo API status error: " + response.statusCode());
         }
         Map<String, Object> payload = objectMapper.readValue(response.body(), new TypeReference<>() {});
         List<Map<String, Object>> choices = castList(payload.get("choices"));
         if (choices.isEmpty()) {
-            throw new IllegalStateException("MiMo API 未返回 choices");
+            throw new IllegalStateException("MiMo API returned no choices");
         }
         Map<String, Object> message = castMap(choices.get(0).get("message"));
         String content = String.valueOf(message.getOrDefault("content", "")).trim();
         if (content.isBlank()) {
-            throw new IllegalStateException("MiMo API 返回内容为空");
+            throw new IllegalStateException("MiMo API returned empty content");
         }
         return content;
     }
@@ -100,21 +91,5 @@ public class MimoClient {
 
     private boolean isBlank(String value) {
         return value == null || value.isBlank();
-    }
-
-    private boolean isRetryable(Exception e) {
-        String message = e.getMessage() == null ? "" : e.getMessage();
-        return message.contains("返回内容为空")
-                || message.contains("timed out")
-                || message.contains("timeout")
-                || message.contains("未返回 choices");
-    }
-
-    private void sleep(long millis) {
-        try {
-            Thread.sleep(millis);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
     }
 }
