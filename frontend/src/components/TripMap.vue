@@ -46,19 +46,24 @@ const mapReady = ref(false)
 let amap = null
 let map = null
 let infoWindow = null
-let drawTimer = null
+let renderTimer = null
+let lastSignature = ''
+let markerPool = []
+let linePool = []
+let labelPool = []
+let drawTimers = []
 
 const activePlan = computed(() => props.plans.find(plan => plan.rank === props.activeRank) || props.plans[0] || null)
 
 watch(() => [props.activeRank, props.plans], () => {
-  renderPlan()
+  scheduleRender()
 }, { deep: true })
 
 watch(collapsed, async value => {
   if (!value) {
     await nextTick()
     map?.resize()
-    renderPlan()
+    scheduleRender(0)
   }
 })
 
@@ -94,39 +99,47 @@ async function initMap() {
     infoWindow = new amap.InfoWindow({ offset: new amap.Pixel(0, -32), isCustom: true })
     mapReady.value = true
     loading.value = false
-    renderPlan()
+    scheduleRender(0)
   } catch (err) {
     loading.value = false
     error.value = err?.message || 'load-failed'
   }
 }
 
+function scheduleRender(delay = 120) {
+  window.clearTimeout(renderTimer)
+  renderTimer = window.setTimeout(() => renderPlan(), delay)
+}
+
 function renderPlan() {
   if (!mapReady.value || !map || !amap || collapsed.value || !activePlan.value) return
-  clearOverlays()
   const points = mapPoints(activePlan.value)
   unavailableStops.value = points.unavailable
   const usable = points.usable
-  if (!usable.length) return
+  const signature = overlaySignature(usable, activePlan.value)
+  if (signature === lastSignature) return
+  lastSignature = signature
+  if (!usable.length) {
+    hideUnused(markerPool, 0)
+    hideUnused(linePool, 0)
+    hideUnused(labelPool, 0)
+    overlays.value = []
+    return
+  }
 
-  const nextOverlays = []
   usable.forEach((point, index) => {
-    const marker = new amap.Marker({
-      position: [point.lng, point.lat],
-      zIndex: point.kind === 'origin' ? 120 : 100 - index,
-      content: markerContent(point),
-      anchor: 'bottom-center'
-    })
-    marker.on('click', () => openInfo(point, marker))
-    nextOverlays.push(marker)
+    const marker = markerFor(index)
+    marker.setPosition([point.lng, point.lat])
+    marker.setzIndex?.(point.kind === 'origin' ? 120 : 100 - index)
+    marker.setContent(markerContent(point))
+    marker.__point = point
+    marker.show()
   })
+  hideUnused(markerPool, usable.length)
 
-  const routeOverlays = routeLines(usable, activePlan.value)
-  nextOverlays.push(...routeOverlays)
-  overlays.value = nextOverlays
-  map.add(nextOverlays)
-  window.setTimeout(() => nextOverlays.forEach(overlay => overlay.show?.()), 20)
-  map.setFitView(nextOverlays, false, [48, 48, 48, 48])
+  const routeOverlays = updateRouteLines(usable, activePlan.value)
+  overlays.value = [...markerPool.slice(0, usable.length), ...routeOverlays]
+  map.setFitView(overlays.value, false, [48, 48, 48, 48])
 }
 
 function mapPoints(plan) {
@@ -149,7 +162,7 @@ function mapPoints(plan) {
   return { usable, unavailable }
 }
 
-function routeLines(points, plan) {
+function updateRouteLines(points, plan) {
   if (points.length < 2) return []
   const result = []
   const route = plan.route || {}
@@ -161,62 +174,116 @@ function routeLines(points, plan) {
     const from = points[i]
     const to = points[i + 1]
     const color = colorFor(to)
-    const line = new amap.Polyline({
-      path: [[from.lng, from.lat]],
-      strokeColor: color,
-      strokeOpacity: 0.9,
-      strokeWeight: 6,
-      strokeStyle: 'solid',
-      showDir: true,
-      lineJoin: 'round',
-      extData: { animatedPath: [[from.lng, from.lat], [to.lng, to.lat]] }
-    })
-    const label = new amap.Text({
-      position: [(from.lng + to.lng) / 2, (from.lat + to.lat) / 2],
-      text: `${formatDistance(totalDistance, segments)}，${formatMinutes(segmentMinutes[i], totalMinutes, segments)}分钟车程`,
-      anchor: 'center',
-      style: {
-        padding: '5px 8px',
-        border: '0',
-        borderRadius: '8px',
-        backgroundColor: 'rgba(255,255,255,.88)',
-        color: '#334155',
-        boxShadow: '0 8px 18px rgba(91,106,150,.16)',
-        fontSize: '12px'
-      }
-    })
+    const line = lineFor(i)
+    const label = labelFor(i)
+    line.setOptions?.({ strokeColor: color, strokeOpacity: 0.9, strokeWeight: 6 })
+    label.setPosition([(from.lng + to.lng) / 2, (from.lat + to.lat) / 2])
+    label.setText(`${formatDistance(totalDistance, segments)}，${formatMinutes(segmentMinutes[i], totalMinutes, segments)}分钟车程`)
+    line.show()
+    label.show()
     result.push(line, label)
     animateLine(line, [[from.lng, from.lat], [to.lng, to.lat]], i)
   }
+  hideUnused(linePool, segments)
+  hideUnused(labelPool, segments)
   return result
 }
 
 function animateLine(line, path, index) {
-  window.clearTimeout(drawTimer)
-  drawTimer = window.setTimeout(() => {
+  if (drawTimers[index]) window.clearTimeout(drawTimers[index])
+  line.setPath([path[0]])
+  drawTimers[index] = window.setTimeout(() => {
     line.setPath(path)
   }, 80 + index * 110)
 }
 
 function clearOverlays() {
-  window.clearTimeout(drawTimer)
+  drawTimers.forEach(timer => window.clearTimeout(timer))
+  drawTimers = []
+  window.clearTimeout(renderTimer)
   if (!map || !overlays.value.length) return
-  overlays.value.forEach(overlay => overlay.hide?.())
   const previous = [...overlays.value]
   overlays.value = []
-  window.setTimeout(() => map?.remove(previous), 300)
+  map?.remove(previous)
+  markerPool = []
+  linePool = []
+  labelPool = []
+  lastSignature = ''
+}
+
+function markerFor(index) {
+  if (markerPool[index]) return markerPool[index]
+  const marker = new amap.Marker({
+    position: defaultCenter(),
+    zIndex: 100 - index,
+    content: '',
+    anchor: 'bottom-center'
+  })
+  marker.on('click', () => openInfo(marker.__point || {}, marker))
+  map.add(marker)
+  markerPool[index] = marker
+  return marker
+}
+
+function lineFor(index) {
+  if (linePool[index]) return linePool[index]
+  const line = new amap.Polyline({
+    path: [],
+    strokeColor: '#13b8a6',
+    strokeOpacity: 0.9,
+    strokeWeight: 6,
+    strokeStyle: 'solid',
+    showDir: true,
+    lineJoin: 'round'
+  })
+  map.add(line)
+  linePool[index] = line
+  return line
+}
+
+function labelFor(index) {
+  if (labelPool[index]) return labelPool[index]
+  const label = new amap.Text({
+    position: defaultCenter(),
+    text: '',
+    anchor: 'center',
+    style: {
+      padding: '5px 8px',
+      border: '0',
+      borderRadius: '8px',
+      backgroundColor: 'rgba(255,255,255,.88)',
+      color: '#334155',
+      boxShadow: '0 8px 18px rgba(91,106,150,.16)',
+      fontSize: '12px'
+    }
+  })
+  map.add(label)
+  labelPool[index] = label
+  return label
+}
+
+function hideUnused(pool, usedCount) {
+  pool.slice(usedCount).forEach(overlay => overlay.hide?.())
+}
+
+function overlaySignature(points, plan) {
+  return [
+    plan?.rank || '',
+    ...points.map(point => `${point.name}:${point.lng.toFixed(6)},${point.lat.toFixed(6)}`),
+    JSON.stringify(plan?.route || {})
+  ].join('|')
 }
 
 function markerContent(point) {
   const icon = point.kind === 'origin' ? '⌂' : point.kind === 'dining' ? '🍽' : '✦'
   return `<div class="amap-trip-marker marker-${point.kind}">
-    <b>${icon}</b><span>${escapeHtml(point.name || '地点')}</span>
+    <b>${icon}</b><span>${escapeHtml(simplifyPoiName(point.name || '地点'))}</span>
   </div>`
 }
 
 function openInfo(point, marker) {
   const content = `<div class="amap-info-card">
-    <strong>${escapeHtml(point.name || '地点')}</strong>
+    <strong>${escapeHtml(simplifyPoiName(point.name || '地点'))}</strong>
     <p>${escapeHtml(point.address || '地址以高德地图为准')}</p>
     <span>评分 ${point.rating || '暂无'} · 可预约状态以商家实时状态为准 · 营业时间以门店为准</span>
   </div>`
@@ -272,6 +339,21 @@ function formatMinutes(segmentValue, totalMinutes, segments) {
   return 5
 }
 
+function simplifyPoiName(name) {
+  const raw = String(name || '地点').trim()
+  const suffix = raw.match(/（[^）]+）|\([^)]+\)$/)?.[0] || ''
+  let base = suffix ? raw.slice(0, -suffix.length) : raw
+  base = base
+    .replace(/羊肉(?=手抓饭|泡馍|汤|面|粉)/g, '')
+    .replace(/(手抓饭)羊肉串/g, '$1')
+    .replace(/(.{2,6})\1+/g, '$1')
+    .replace(/(旗舰店|体验店|官方店|专门店|主题店){2,}/g, '$1')
+  if (base.length > 14) {
+    base = base.replace(/(餐厅|饭店|美食|小吃|料理|烤肉|烧烤|火锅|咖啡|影院|影城|公园|广场).*$/, '$1')
+  }
+  return `${base}${suffix}`
+}
+
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, char => ({
     '&': '&amp;',
@@ -293,6 +375,7 @@ onBeforeUnmount(() => {
 .trip-map-panel {
   position: relative;
   width: 100%;
+  max-width: 100%;
   margin-top: 12px;
   border-radius: 12px;
   background: #fff;
@@ -477,5 +560,11 @@ onBeforeUnmount(() => {
 @keyframes map-shimmer {
   0% { background-position: -220px 0, 0 0, 0 0; }
   100% { background-position: 220px 0, 0 0, 0 0; }
+}
+
+@media (max-width: 760px) {
+  .map-body {
+    height: 300px;
+  }
 }
 </style>
