@@ -1,5 +1,5 @@
 <template>
-  <main :class="['chat-app', `theme-${demoTheme}`]">
+  <main class="chat-app theme-animal">
     <div class="paper-doodles" aria-hidden="true">
       <span class="doodle doodle-peach"></span>
       <span class="doodle doodle-blue"></span>
@@ -43,7 +43,7 @@
           </span>
           <span class="brand-copy">
             <strong>立刻游</strong>
-            <small>像手账一样把本地出行安排明白</small>
+            <small>像掌机游戏一样把本地出行安排明白</small>
           </span>
         </button>
       </div>
@@ -60,25 +60,6 @@
     </header>
 
     <div class="app-layout">
-      <section class="theme-switcher scrapbook-panel">
-        <div class="theme-switcher-copy">
-          <span class="section-sticker">Demo themes</span>
-          <strong>同页切换 3 套方向</strong>
-        </div>
-        <div class="theme-switcher-tabs">
-          <button
-            v-for="option in themeOptions"
-            :key="option.key"
-            type="button"
-            :class="['theme-chip', { active: demoTheme === option.key }]"
-            @click="setDemoTheme(option.key)"
-          >
-            <strong>{{ option.label }}</strong>
-            <small>{{ option.note }}</small>
-          </button>
-        </div>
-      </section>
-
       <HistorySidebar
         :threads="historyThreads"
         :selected-thread-id="currentThreadId"
@@ -93,15 +74,23 @@
       <section v-if="activeView === 'chat'" :class="['chat-shell', { 'result-mode': showPlanWorkspace }]">
         <div v-if="messages.length === 0" class="empty-state">
           <AnimalCard
-            v-if="isAnimalTheme"
             type="title"
             color="app-green"
             class="welcome-card animal-welcome-card animal-demo-shell"
           >
-            <template #title>Animal-inspired Demo</template>
-            <div class="animal-demo-copy">
-              <h1>{{ themeHero.title }}</h1>
-              <p>{{ themeHero.description }}</p>
+            <template #title>{{ themeHero.badge }}</template>
+            <div class="animal-hero-layout">
+              <div class="animal-demo-copy">
+                <h1>{{ themeHero.title }}</h1>
+                <p>{{ themeHero.description }}</p>
+                <div class="animal-note-strip">
+                  <span class="animal-sticker-chip">贴纸快选</span>
+                  <small>从常见出发场景开始，先把路线意图说清楚，再继续规划。</small>
+                </div>
+              </div>
+              <div class="animal-hero-art">
+                <img :src="themeHero.image" alt="いらすとや 欢迎插画" />
+              </div>
             </div>
             <div class="animal-demo-prompts">
               <AnimalButton
@@ -115,37 +104,6 @@
               </AnimalButton>
             </div>
           </AnimalCard>
-
-          <section v-else :class="['welcome-card', 'scrapbook-panel', { 'irasutoya-welcome': isIrasutoyaTheme }]">
-            <span class="welcome-tape tape-left"></span>
-            <span class="welcome-tape tape-right"></span>
-            <div class="welcome-copy">
-              <span class="welcome-badge">{{ themeHero.badge }}</span>
-              <h1>{{ themeHero.title }}</h1>
-              <p>{{ themeHero.description }}</p>
-            </div>
-            <div v-if="isIrasutoyaTheme" class="welcome-irasutoya-art">
-              <img :src="themeHero.image" alt="いらすとや 演示插画" />
-            </div>
-            <div v-else class="welcome-mascot" aria-hidden="true">
-              <svg viewBox="0 0 160 140" xmlns="http://www.w3.org/2000/svg">
-                <path d="M24 84c0-26 21-48 48-48h27c22 0 37 16 37 36s-12 40-37 40H58c-18 0-34-10-34-28Z" fill="#fff4df" stroke="#73452f" stroke-width="4" />
-                <path d="M86 18c11 0 21 4 28 11" stroke="#73452f" stroke-width="4" stroke-linecap="round" />
-                <path d="M45 62c8-7 22-12 42-12 12 0 28 5 37 11" fill="#87b3ff" stroke="#73452f" stroke-width="4" stroke-linejoin="round" />
-                <circle cx="60" cy="70" r="4" fill="#73452f" />
-                <circle cx="97" cy="70" r="4" fill="#73452f" />
-                <path d="M67 87c6 4 17 4 23 0" stroke="#73452f" stroke-width="4" stroke-linecap="round" />
-                <circle cx="29" cy="29" r="13" fill="#ffd995" stroke="#73452f" stroke-width="3" />
-                <path d="M120 98c14 2 23 8 28 18" stroke="#73452f" stroke-width="4" stroke-linecap="round" />
-              </svg>
-            </div>
-            <div class="quick-prompts">
-              <button v-for="sample in quickPrompts" :key="sample.label" type="button" class="prompt-sticker" @click="useSample(sample.text)">
-                <strong>{{ sample.label }}</strong>
-                <small>{{ sample.note }}</small>
-              </button>
-            </div>
-          </section>
         </div>
 
         <div v-else class="step-summary">
@@ -165,14 +123,15 @@
               </div>
             </button>
           </div>
-          <button
+          <AnimalButton
             v-if="hasFinalPlans"
             class="summary-share"
-            type="button"
+            type="primary"
+            size="large"
             @click="createShareLink"
           >
             分享给同行人
-          </button>
+          </AnimalButton>
         </div>
 
         <section v-if="hasFinalPlans" v-show="showPlanWorkspace" class="result-workspace">
@@ -216,8 +175,8 @@
                 </span>
               </div>
               <footer>
-                <button type="button" @click.stop="expandedRank = expandedRank === plan.rank ? null : plan.rank">查看详情</button>
-                <button class="pick-button" type="button" @click.stop="selectPlan(plan.rank)">选这个</button>
+                <AnimalButton type="default" size="middle" @click.stop="expandedRank = expandedRank === plan.rank ? null : plan.rank">查看详情</AnimalButton>
+                <AnimalButton class="pick-button" type="primary" size="middle" @click.stop="selectPlan(plan.rank)">选这个</AnimalButton>
               </footer>
               <div v-if="expandedRank === plan.rank" class="plan-detail">
                 <p v-for="reason in planAdvantages(plan)" :key="reason">{{ reason }}</p>
@@ -290,7 +249,7 @@
         </ol>
       </section>
 
-      <section v-else-if="activeView === 'collab'" :class="['page-panel', 'scrapbook-panel', { 'irasutoya-panel': isIrasutoyaTheme }]">
+      <section v-else-if="activeView === 'collab'" class="page-panel scrapbook-panel">
         <header>
           <span class="section-sticker">同行投票</span>
           <div>
@@ -298,7 +257,7 @@
             <p>大家一起选方案、提意见，AI 会自动调整。</p>
           </div>
         </header>
-        <div v-if="isIrasutoyaTheme" class="panel-illustration">
+        <div class="panel-illustration">
           <img :src="IRASUTOYA_IMAGES.collab" alt="いらすとや 协同演示插画" />
         </div>
         <div class="shared-plans">
@@ -311,14 +270,14 @@
               <span class="plan-tag">{{ voteCount(plan.rank) }} 票</span>
             </header>
             <p class="timeline-line">{{ compactTimeline(plan.timeline) }}</p>
-            <button class="pick-button" type="button" @click="vote(plan.rank)">
+            <AnimalButton class="pick-button" type="primary" size="middle" @click="vote(plan.rank)">
               {{ votedRank === plan.rank ? '已投票' : '投票选这个' }}
-            </button>
+            </AnimalButton>
           </article>
         </div>
         <label class="comment-box">
           <input v-model="collabComment" placeholder="提你的意见，比如：能不能把吃饭时间调后半小时？" />
-          <button type="button" @click="submitComment">提交意见</button>
+          <AnimalButton type="primary" size="middle" @click="submitComment">提交意见</AnimalButton>
         </label>
         <ul class="comments">
           <li v-for="comment in comments" :key="comment.id">
@@ -342,10 +301,10 @@
             {{ step.name }}
           </li>
         </ol>
-        <button class="primary-button" type="button" @click="copyShareMessage">发给同行人</button>
+        <AnimalButton class="primary-button" type="primary" size="large" @click="copyShareMessage">发给同行人</AnimalButton>
       </section>
 
-      <section v-else :class="['page-panel', 'scrapbook-panel', 'profile-panel', { 'irasutoya-panel': isIrasutoyaTheme }]">
+      <section v-else class="page-panel scrapbook-panel profile-panel">
         <header>
           <span class="section-sticker">偏好记忆</span>
           <div>
@@ -353,7 +312,7 @@
             <p>老婆最近在减肥、孩子需要亲子设施、朋友不吃辣，下次规划会自动适配。</p>
           </div>
         </header>
-        <div v-if="isIrasutoyaTheme" class="panel-illustration memory-illustration">
+        <div class="panel-illustration memory-illustration">
           <img :src="IRASUTOYA_IMAGES.memory" alt="いらすとや 记忆演示插画" />
         </div>
         <div class="memory-grid">
@@ -372,22 +331,14 @@
           </svg>
         </span>
         <AnimalInput
-          v-if="isAnimalTheme"
           v-model="message"
           class="animal-demo-input"
           size="large"
+          :allow-clear="true"
           :shadow="true"
           placeholder="输入你的出行需求，比如‘今天晚上静安寺，4 个朋友，预算 800’"
           @keydown.enter="plan"
         />
-        <label v-else class="command-input">
-          <span class="input-tag">便签输入</span>
-          <input
-            v-model="message"
-            placeholder="输入你的出行需求，比如‘今天晚上静安寺，4 个朋友，预算 800’"
-            @keydown.enter="plan"
-          />
-        </label>
         <button type="button" class="tool-button" :class="{ active: voiceRecording }" @click="toggleVoice">
           <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
             <rect x="8" y="4" width="8" height="12" rx="4" stroke="currentColor" stroke-width="2" />
@@ -438,7 +389,6 @@ import HistorySidebar from './components/HistorySidebar.vue'
 import { clarificationSummary, restoreThreadState } from './historyState.js'
 import TripMap from './components/TripMap.vue'
 
-const DEMO_THEMES = ['animal', 'irasutoya', 'scrapbook']
 const IRASUTOYA_IMAGES = {
   welcome: irasutoyaWelcome,
   collab: irasutoyaCollab,
@@ -450,7 +400,6 @@ const message = ref('')
 const loading = ref(false)
 const voiceRecording = ref(false)
 const fileInput = ref(null)
-const demoTheme = ref('scrapbook')
 const activeView = ref('chat')
 const currentStep = ref('need')
 const messages = ref([])
@@ -480,42 +429,16 @@ const executionSteps = ref([...defaultExecutionSteps])
 const memoryTags = ref(['老婆减肥', '孩子要亲子设施', '朋友不吃辣', '周末不跑远'])
 
 const hasFinalPlans = computed(() => shownPlans.value.length > 0)
-const isAnimalTheme = computed(() => demoTheme.value === 'animal')
-const isIrasutoyaTheme = computed(() => demoTheme.value === 'irasutoya')
 const showPlanWorkspace = computed(() => activeView.value === 'chat' && hasFinalPlans.value && currentStep.value === 'plans')
 const showComposer = computed(() => activeView.value !== 'chat' || currentStep.value !== 'plans' || !hasFinalPlans.value)
-const themeOptions = computed(() => [
-  { key: 'animal', label: 'Animal-inspired', note: '局部借用 animal-island-vue' },
-  { key: 'irasutoya', label: 'Irasutoya playful', note: '本地演示插画素材' },
-  { key: 'scrapbook', label: 'Refined scrapbook', note: '当前手账方向加强版' }
-])
 const themeHero = computed(() => {
-  if (isIrasutoyaTheme.value) {
-    return {
-      badge: 'いらすとや 演示素材',
-      title: '用熟悉的日式插画，把出门计划做得更亲切',
-      description: '欢迎区、协同页和记忆页直接用插画承接情绪，品牌和头像不再靠手写 SVG 撑场。',
-      image: IRASUTOYA_IMAGES.welcome
-    }
-  }
-  if (isAnimalTheme.value) {
-    return {
-      badge: 'Animal 演示模式',
-      title: '把首页和卡片先切成更像游戏 UI 的动物风格',
-      description: '只局部接入按钮、卡片和输入框，让你快速判断这条路线值不值得继续推进。',
-      image: ''
-    }
-  }
   return {
-    badge: 'AI 旅行小贴士',
-    title: '把这次出门，做成一页轻松的小手账',
-    description: '一句话告诉我所有人的需求，我会帮你查地点、排路线、订东西，出发当天继续守护。',
-    image: ''
+    badge: 'Animal-inspired Demo',
+    title: '像生活游戏一样，把本地出行轻松安排明白',
+    description: '欢迎区用插画承接情绪，功能入口保持前排；下面的卡片、按钮和输入区统一收口成更完整的 animal UI。',
+    image: IRASUTOYA_IMAGES.welcome
   }
 })
-
-const initialTheme = new URLSearchParams(window.location.search).get('theme')
-if (DEMO_THEMES.includes(initialTheme)) demoTheme.value = initialTheme
 const stepCards = computed(() => {
   const userText = latestUserText()
   const answerSource = hasFinalPlans.value ? completedClarificationAnswers.value : clarificationAnswers.value
@@ -583,14 +506,6 @@ function handleWindowKeydown(event) {
   if (event.key === 'Escape') {
     sidebarOpen.value = false
   }
-}
-
-function setDemoTheme(theme) {
-  if (!DEMO_THEMES.includes(theme)) return
-  demoTheme.value = theme
-  const url = new URL(window.location.href)
-  url.searchParams.set('theme', theme)
-  window.history.replaceState({}, '', url)
 }
 
 function nowText() {
@@ -1369,54 +1284,6 @@ input {
   margin: 0 auto;
 }
 
-.theme-switcher {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 1rem;
-  align-items: center;
-  margin-bottom: 1rem;
-  border-radius: 1.5rem;
-  padding: .95rem 1rem;
-}
-
-.theme-switcher-copy {
-  display: grid;
-  gap: .25rem;
-}
-
-.theme-switcher-copy strong {
-  font-size: 1rem;
-}
-
-.theme-switcher-tabs {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: .7rem;
-}
-
-.theme-chip {
-  min-height: 4.2rem;
-  border-radius: 1.1rem;
-  padding: .7rem .85rem;
-  display: grid;
-  gap: .2rem;
-  text-align: left;
-}
-
-.theme-chip strong {
-  font-size: .92rem;
-}
-
-.theme-chip small {
-  color: #8c6752;
-  font-size: .78rem;
-  line-height: 1.35;
-}
-
-.theme-chip.active {
-  background: linear-gradient(180deg, #fff7ee 0%, #ffd8bf 100%);
-}
-
 .sidebar-mask {
   position: fixed;
   inset: 0;
@@ -1461,10 +1328,17 @@ input {
   padding: 1.25rem;
 }
 
+.animal-hero-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(220px, .9fr);
+  gap: 1rem 1.4rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
 .animal-demo-copy {
   display: grid;
   gap: .8rem;
-  margin-bottom: 1rem;
 }
 
 .animal-demo-copy h1 {
@@ -1479,14 +1353,49 @@ input {
   line-height: 1.7;
 }
 
+.animal-note-strip {
+  display: grid;
+  gap: .35rem;
+  width: fit-content;
+  max-width: 100%;
+  padding: .7rem .85rem;
+  border: 2px dashed rgba(114, 93, 66, .28);
+  border-radius: 1rem;
+  background: rgba(255, 250, 235, .84);
+}
+
+.animal-note-strip small {
+  color: #8b7b61;
+  font-size: .84rem;
+  line-height: 1.5;
+}
+
+.animal-sticker-chip {
+  width: fit-content;
+  border: 2px solid #aaa69d;
+  border-radius: 999px;
+  padding: .18rem .55rem;
+  background: #f6dd88;
+  color: #725542;
+  font-size: .72rem;
+  font-weight: 900;
+}
+
+.animal-hero-art {
+  display: grid;
+  place-items: center;
+}
+
+.animal-hero-art img {
+  width: min(100%, 19rem);
+  height: auto;
+  object-fit: contain;
+}
+
 .animal-demo-prompts {
   display: flex;
   flex-wrap: wrap;
   gap: .75rem;
-}
-
-.irasutoya-welcome {
-  grid-template-columns: minmax(0, 1.1fr) minmax(240px, 1fr);
 }
 
 .welcome-tape {
@@ -1555,17 +1464,6 @@ input {
   width: min(100%, 18rem);
   height: auto;
   animation: bob 4.4s ease-in-out infinite;
-}
-
-.welcome-irasutoya-art {
-  display: grid;
-  place-items: center;
-}
-
-.welcome-irasutoya-art img {
-  width: min(100%, 21rem);
-  height: auto;
-  object-fit: contain;
 }
 
 .quick-prompts {
@@ -2005,14 +1903,12 @@ input {
 }
 
 .clarify-card input,
-.comment-box input,
-.command-input input {
+.comment-box input {
   width: 100%;
 }
 
 .clarify-card input,
-.comment-box input,
-.command-input {
+.comment-box input {
   border: 2px solid var(--ink-strong);
   border-radius: 1rem;
   background: rgba(255, 255, 255, .82);
@@ -2025,8 +1921,7 @@ input {
 }
 
 .clarify-card input:focus,
-.comment-box input:focus,
-.command-input:focus-within {
+.comment-box input:focus {
   box-shadow: 0 0 0 4px rgba(140, 178, 255, .24);
 }
 
@@ -2241,14 +2136,6 @@ input {
   align-items: center;
 }
 
-.command-input {
-  min-height: 3.6rem;
-  padding: .5rem .85rem;
-  display: grid;
-  grid-template-rows: auto 1fr;
-  gap: .12rem;
-}
-
 .animal-demo-input {
   align-self: stretch;
 }
@@ -2309,13 +2196,11 @@ input {
   box-shadow: 0 6px 0 rgba(189, 174, 160, .9);
 }
 
-.theme-animal .theme-chip.active,
 .theme-animal .history-toggle,
 .theme-animal .avatar,
 .theme-animal .date-sticker,
 .theme-animal .prompt-sticker,
 .theme-animal .tool-button,
-.theme-animal .command-input,
 .theme-animal .plan-card footer button,
 .theme-animal .meta-chip,
 .theme-animal .memory-grid span,
@@ -2328,7 +2213,6 @@ input {
   box-shadow: 0 4px 0 rgba(212, 201, 180, .9);
 }
 
-.theme-animal .theme-chip.active,
 .theme-animal .step-card.current,
 .theme-animal .message-row.user .bubble,
 .theme-animal .plan-card.picked,
@@ -2400,6 +2284,15 @@ input {
   color: #8b7b61;
 }
 
+.theme-animal .animal-note-strip {
+  box-shadow: 0 4px 0 rgba(212, 201, 180, .7);
+}
+
+.theme-animal .animal-hero-art img,
+.theme-animal .panel-illustration img {
+  filter: drop-shadow(0 12px 18px rgba(61, 52, 40, .14));
+}
+
 .theme-animal .animal-demo-prompts .animal-btn {
   min-width: 10.5rem;
 }
@@ -2414,134 +2307,6 @@ input {
 
 .theme-animal .message-row.user .bubble {
   border-radius: 1.8rem 1.8rem 1.8rem 1.3rem;
-}
-
-.theme-irasutoya {
-  --ink: #7a5a3c;
-  --ink-strong: #5b412c;
-  --paper: #fff9f1;
-  --paper-soft: #fffdfa;
-  --peach: #ffba94;
-  --peach-deep: #ef8f67;
-  --blue: #8bbde8;
-  --blue-deep: #6396da;
-  --yellow: #ffe07a;
-  --mint: #b8df90;
-  --rose: #ffb2bc;
-  --line: rgba(91, 65, 44, .16);
-  --panel-shadow: 0 14px 0 rgba(238, 190, 139, .22), 0 24px 34px rgba(139, 164, 208, .12);
-  background:
-    radial-gradient(circle at 14% 14%, rgba(255, 226, 155, .46), transparent 16%),
-    radial-gradient(circle at 86% 18%, rgba(151, 205, 255, .36), transparent 16%),
-    radial-gradient(circle at 18% 88%, rgba(255, 186, 148, .3), transparent 14%),
-    linear-gradient(180deg, #fffef8 0%, #fff6e6 48%, #fff0dd 100%);
-  font-family: "Hiragino Maru Gothic ProN", "Yu Gothic", "Meiryo", "Microsoft YaHei", sans-serif;
-}
-
-.theme-irasutoya .paper-doodles {
-  opacity: .7;
-}
-
-.theme-irasutoya .scrapbook-panel,
-.theme-irasutoya .welcome-card,
-.theme-irasutoya .step-card,
-.theme-irasutoya .plan-card,
-.theme-irasutoya .bubble,
-.theme-irasutoya .page-panel,
-.theme-irasutoya .composer,
-.theme-irasutoya .history-sidebar,
-.theme-irasutoya :deep(.trip-map-panel) {
-  border-color: rgba(91, 65, 44, .78);
-  background: rgba(255, 253, 247, .94);
-  box-shadow: 0 12px 0 rgba(255, 215, 157, .38), 0 22px 34px rgba(137, 170, 219, .12);
-}
-
-.theme-irasutoya .topbar {
-  background: rgba(255, 252, 246, .92);
-}
-
-.theme-irasutoya .theme-switcher {
-  position: relative;
-  overflow: hidden;
-}
-
-.theme-irasutoya .theme-switcher::after {
-  content: '';
-  position: absolute;
-  right: 1.2rem;
-  top: .8rem;
-  width: 4.8rem;
-  height: 4.8rem;
-  background: radial-gradient(circle, rgba(255, 224, 122, .45) 0 40%, transparent 41%);
-  opacity: .8;
-  pointer-events: none;
-}
-
-.theme-irasutoya .irasutoya-welcome {
-  background:
-    linear-gradient(180deg, rgba(255, 251, 239, .98) 0%, rgba(255, 240, 221, .98) 100%);
-}
-
-.theme-irasutoya .welcome-irasutoya-art img,
-.theme-irasutoya .panel-illustration img {
-  filter: drop-shadow(0 12px 20px rgba(122, 90, 60, .12));
-}
-
-.theme-irasutoya .quick-prompts {
-  gap: 1rem;
-}
-
-.theme-irasutoya .prompt-sticker {
-  background: linear-gradient(180deg, #fffefb 0%, #fff1de 100%);
-}
-
-.theme-irasutoya .theme-chip.active,
-.theme-irasutoya .step-card.current,
-.theme-irasutoya .message-row.user .bubble,
-.theme-irasutoya .plan-card.picked,
-.theme-irasutoya .tool-button.active {
-  background: linear-gradient(180deg, #fff8f2 0%, #ffe4d2 100%);
-}
-
-.theme-irasutoya .plan-tag,
-.theme-irasutoya .step-card.done .step-icon,
-.theme-irasutoya .comments span,
-.theme-irasutoya .execution-panel li.done span {
-  background: #b8df90;
-}
-
-.theme-irasutoya .step-icon,
-.theme-irasutoya .execution-panel li span {
-  background: #8bbde8;
-  color: #fff;
-}
-
-.theme-irasutoya .welcome-badge,
-.theme-irasutoya .section-sticker,
-.theme-irasutoya .bubble-pin,
-.theme-irasutoya .clarify-badge,
-.theme-irasutoya .history-pin,
-.theme-irasutoya .plan-ribbon,
-.theme-irasutoya .date-sticker {
-  background: #ffe07a;
-}
-
-.theme-irasutoya .panel-illustration {
-  padding: .5rem 0 .2rem;
-}
-
-.theme-irasutoya .irasutoya-panel {
-  background-image: radial-gradient(circle at 92% 10%, rgba(255, 224, 122, .2), transparent 18%);
-}
-
-.input-tag {
-  color: #8c6752;
-  font-size: .76rem;
-  font-weight: 900;
-}
-
-.command-input input {
-  padding: 0;
 }
 
 .tool-button,
@@ -2591,11 +2356,7 @@ input {
     grid-template-columns: 1fr;
   }
 
-  .theme-switcher {
-    grid-template-columns: 1fr;
-  }
-
-  .welcome-mascot {
+  .animal-hero-art {
     order: -1;
   }
 }
@@ -2623,7 +2384,6 @@ input {
     border-radius: 1.6rem;
   }
 
-  .theme-switcher-tabs,
   .quick-prompts,
   .step-card-list,
   .clarify-layout,

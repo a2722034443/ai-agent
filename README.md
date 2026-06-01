@@ -29,6 +29,12 @@
 - External providers: MiMo-compatible LLM, Amap Web Service, Amap JS API, Tavily optional search
 - Test: JUnit/Spring Boot Test, Vite production build
 
+## 前端演示引用
+
+- 当前前端 UI demo 局部使用/参考了 [`animal-island-vue`](https://github.com/guokaigdg/animal-island-vue) 的组件与视觉语言，用于本地界面演示和风格验证。
+- 当前欢迎区、协同页、记忆页演示插画引用了 [`いらすとや`](https://www.irasutoya.com/) 素材，用于本地界面演示和情绪表达验证。
+- 上述第三方资源在本仓库中的用途仅限本地 UI 演示与视觉验证；如需进一步正式发布，请以各自上游说明和资源使用要求为准。
+
 ## 快速启动
 
 项目不使用 Docker。请在本机安装并启动：
