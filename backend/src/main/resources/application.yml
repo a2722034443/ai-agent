@@ -60,6 +60,19 @@ external:
       model: ${MIMO_SECONDARY_MODEL:}
       max-tokens: ${MIMO_SECONDARY_MAX_TOKENS:1024}
       timeout-ms: ${MIMO_SECONDARY_TIMEOUT_MS:4000}
+  asr:
+    enabled: ${ASR_ENABLED:true}
+    provider: ${ASR_PROVIDER:mock}
+    base-url: ${ASR_BASE_URL:https://nls-gateway-cn-shanghai.aliyuncs.com}
+    token-url: ${ASR_TOKEN_URL:https://nls-meta.cn-shanghai.aliyuncs.com}
+    access-key-id: ${ALIYUN_ACCESS_KEY_ID:}
+    access-key-secret: ${ALIYUN_ACCESS_KEY_SECRET:}
+    app-key: ${ALIYUN_NLS_APP_KEY:}
+    format: ${ASR_AUDIO_FORMAT:wav}
+    sample-rate: ${ASR_SAMPLE_RATE:16000}
+    timeout-ms: ${ASR_TIMEOUT_MS:15000}
+    max-audio-mb: ${ASR_MAX_AUDIO_MB:10}
+    max-duration-seconds: ${ASR_MAX_DURATION_SECONDS:30}
 
 agent:
   pipeline: ${AGENT_PIPELINE_PATH:../agents/pipeline.yml}

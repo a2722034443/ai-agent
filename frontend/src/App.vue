@@ -200,7 +200,15 @@
           @keydown.enter="plan"
         />
       </label>
-      <button type="button" :class="{ active: voiceRecording }" @click="toggleVoice">语音</button>
+      <button
+        type="button"
+        :class="{ active: voiceRecording || voiceTranscribing }"
+        :disabled="voiceTranscribing"
+        :title="voiceHint"
+        @click="toggleVoice"
+      >
+        {{ voiceButtonText }}
+      </button>
       <button class="primary-button" type="button" :disabled="!message.trim() || loading" @click="plan">
         {{ loading ? '规划中' : '规划' }}
       </button>
@@ -210,13 +218,18 @@
 
 <script setup>
 import { computed, nextTick, ref } from 'vue'
-import { confirmPlan, createPlan, createSession, createShare, getGuardStatus, getMemory, getSessionToken, submitCollabComment, voteShare } from './api.js'
+import { confirmPlan, createPlan, createSession, createShare, getGuardStatus, getMemory, getSessionToken, submitCollabComment, transcribeAudio, voteShare } from './api.js'
 import TripMap from './components/TripMap.vue'
 
 const token = ref(localStorage.getItem('lla_token') || '')
 const message = ref('')
 const loading = ref(false)
 const voiceRecording = ref(false)
+const voiceTranscribing = ref(false)
+const voiceError = ref('')
+const mediaRecorder = ref(null)
+const audioChunks = ref([])
+const recordingTimer = ref(null)
 const activeView = ref('chat')
 const currentStep = ref('need')
 const messages = ref([])
@@ -244,6 +257,11 @@ const memoryTags = ref(['老婆减肥', '孩子要亲子设施', '朋友不吃�
 const hasFinalPlans = computed(() => shownPlans.value.length > 0)
 const showPlanWorkspace = computed(() => activeView.value === 'chat' && hasFinalPlans.value && currentStep.value === 'plans')
 const showComposer = computed(() => activeView.value !== 'chat' || currentStep.value !== 'plans' || !hasFinalPlans.value)
+const voiceButtonText = computed(() => {
+  if (voiceTranscribing.value) return '识别中'
+  return voiceRecording.value ? '停止' : '语音'
+})
+const voiceHint = computed(() => voiceError.value || (voiceRecording.value ? '点击停止录音' : '点击开始语音输入'))
 const stepCards = computed(() => {
   const userText = latestUserText()
   const answerSource = hasFinalPlans.value ? completedClarificationAnswers.value : clarificationAnswers.value
@@ -706,9 +724,129 @@ async function createShareLink() {
   activeView.value = 'collab'
 }
 
-function toggleVoice() {
-  voiceRecording.value = !voiceRecording.value
-  if (voiceRecording.value) message.value = '今天下午带老婆孩子出去玩，别离家太远，老婆最近在减肥。'
+async function toggleVoice() {
+  if (voiceTranscribing.value) return
+  if (voiceRecording.value) {
+    stopVoiceRecording()
+    return
+  }
+  await startVoiceRecording()
+}
+
+async function startVoiceRecording() {
+  voiceError.value = ''
+  if (!navigator.mediaDevices?.getUserMedia) {
+    voiceError.value = '当前浏览器不支持录音'
+    return
+  }
+  try {
+    await ensureSession()
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    const recorder = new MediaRecorder(stream)
+    audioChunks.value = []
+    recorder.ondataavailable = event => {
+      if (event.data?.size) audioChunks.value.push(event.data)
+    }
+    recorder.onstop = async () => {
+      stream.getTracks().forEach(track => track.stop())
+      await submitVoiceRecording()
+    }
+    mediaRecorder.value = recorder
+    recorder.start()
+    voiceRecording.value = true
+    recordingTimer.value = window.setTimeout(() => stopVoiceRecording(), 30000)
+  } catch (err) {
+    voiceError.value = err?.name === 'NotAllowedError' ? '麦克风权限被拒绝' : '无法启动录音'
+  }
+}
+
+function stopVoiceRecording() {
+  if (recordingTimer.value) {
+    window.clearTimeout(recordingTimer.value)
+    recordingTimer.value = null
+  }
+  const recorder = mediaRecorder.value
+  if (recorder && recorder.state !== 'inactive') recorder.stop()
+  voiceRecording.value = false
+}
+
+async function submitVoiceRecording() {
+  if (!audioChunks.value.length) return
+  voiceTranscribing.value = true
+  voiceError.value = ''
+  try {
+    const rawBlob = new Blob(audioChunks.value, { type: audioChunks.value[0]?.type || 'audio/webm' })
+    const wavBlob = await convertBlobToWav(rawBlob)
+    const file = new File([wavBlob], `voice-${Date.now()}.wav`, { type: 'audio/wav' })
+    const result = await transcribeAudio(file)
+    if (result?.text) {
+      message.value = message.value ? `${message.value}${result.text}` : result.text
+    } else {
+      voiceError.value = '没有识别到文字'
+    }
+  } catch (err) {
+    voiceError.value = err?.payload?.error || err?.message || '语音识别失败'
+  } finally {
+    voiceTranscribing.value = false
+    audioChunks.value = []
+    mediaRecorder.value = null
+  }
+}
+
+async function convertBlobToWav(blob) {
+  const audioContext = new AudioContext()
+  try {
+    const arrayBuffer = await blob.arrayBuffer()
+    const decoded = await audioContext.decodeAudioData(arrayBuffer)
+    const wavBuffer = audioBufferToWav(resampleToMono(decoded, 16000), 16000)
+    return new Blob([wavBuffer], { type: 'audio/wav' })
+  } finally {
+    audioContext.close?.()
+  }
+}
+
+function resampleToMono(buffer, targetRate) {
+  const source = buffer.getChannelData(0)
+  const ratio = buffer.sampleRate / targetRate
+  const length = Math.max(1, Math.round(source.length / ratio))
+  const output = new Float32Array(length)
+  for (let i = 0; i < length; i++) {
+    const index = Math.min(source.length - 1, Math.floor(i * ratio))
+    output[i] = source[index]
+  }
+  return output
+}
+
+function audioBufferToWav(samples, sampleRate) {
+  const bytesPerSample = 2
+  const blockAlign = bytesPerSample
+  const buffer = new ArrayBuffer(44 + samples.length * bytesPerSample)
+  const view = new DataView(buffer)
+  writeAscii(view, 0, 'RIFF')
+  view.setUint32(4, 36 + samples.length * bytesPerSample, true)
+  writeAscii(view, 8, 'WAVE')
+  writeAscii(view, 12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, 1, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * blockAlign, true)
+  view.setUint16(32, blockAlign, true)
+  view.setUint16(34, 16, true)
+  writeAscii(view, 36, 'data')
+  view.setUint32(40, samples.length * bytesPerSample, true)
+  let offset = 44
+  for (let i = 0; i < samples.length; i++, offset += 2) {
+    const sample = Math.max(-1, Math.min(1, samples[i]))
+    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true)
+  }
+  return buffer
+}
+
+function writeAscii(view, offset, text) {
+  for (let i = 0; i < text.length; i++) {
+    view.setUint8(offset + i, text.charCodeAt(i))
+  }
 }
 
 function copyShareMessage() {
@@ -1560,6 +1698,12 @@ input {
   color: #334155;
   font-size: 14px;
   font-weight: 800;
+}
+
+.composer > button.active {
+  background: #fff1f2;
+  color: #be123c;
+  box-shadow: inset 0 0 0 1px rgba(225, 29, 72, .28);
 }
 
 @media (min-width: 768px) {

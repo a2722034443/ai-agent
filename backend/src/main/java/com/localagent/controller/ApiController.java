@@ -9,6 +9,7 @@ import com.localagent.dto.ApiDtos.PlanResponse;
 import com.localagent.dto.ApiDtos.SessionRequest;
 import com.localagent.dto.ApiDtos.SessionResponse;
 import com.localagent.dto.ApiDtos.ShareRequest;
+import com.localagent.dto.ApiDtos.SpeechTranscribeResponse;
 import com.localagent.dto.ApiDtos.VoteRequest;
 import com.localagent.service.AmapPoiSearchTool;
 import com.localagent.service.CollaborationMockService;
@@ -16,6 +17,8 @@ import com.localagent.service.PlanBlockedException;
 import com.localagent.service.PlanningService;
 import com.localagent.service.SessionAuthException;
 import com.localagent.service.SessionService;
+import com.localagent.service.SpeechTranscriptionException;
+import com.localagent.service.SpeechTranscriptionService;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.UUID;
@@ -28,7 +31,11 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
+import org.springframework.web.multipart.MultipartException;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api")
@@ -37,14 +44,17 @@ public class ApiController {
     private final PlanningService planningService;
     private final AmapPoiSearchTool poiSearchTool;
     private final CollaborationMockService collaborationMockService;
+    private final SpeechTranscriptionService speechTranscriptionService;
 
     public ApiController(SessionService sessionService, PlanningService planningService,
                          AmapPoiSearchTool poiSearchTool,
-                         CollaborationMockService collaborationMockService) {
+                         CollaborationMockService collaborationMockService,
+                         SpeechTranscriptionService speechTranscriptionService) {
         this.sessionService = sessionService;
         this.planningService = planningService;
         this.poiSearchTool = poiSearchTool;
         this.collaborationMockService = collaborationMockService;
+        this.speechTranscriptionService = speechTranscriptionService;
     }
 
     @PostMapping("/sessions")
@@ -105,6 +115,13 @@ public class ApiController {
         return collaborationMockService.guardStatus();
     }
 
+    @PostMapping("/speech/transcribe")
+    public SpeechTranscribeResponse transcribe(@RequestHeader("X-Session-Token") String token,
+                                               @RequestParam("file") MultipartFile file) {
+        sessionService.validate(token);
+        return speechTranscriptionService.transcribe(file);
+    }
+
     @ExceptionHandler(SessionAuthException.class)
     public ResponseEntity<Map<String, Object>> unauthorized(SessionAuthException ex) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", ex.getMessage()));
@@ -115,6 +132,14 @@ public class ApiController {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
                 "error", ex.getMessage(),
                 "status", "INVALID_REQUEST"
+        ));
+    }
+
+    @ExceptionHandler({MultipartException.class, MissingServletRequestPartException.class})
+    public ResponseEntity<Map<String, Object>> invalidMultipart(Exception ex) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
+                "error", "音频文件不能为空",
+                "status", "INVALID_AUDIO"
         ));
     }
 
@@ -131,6 +156,14 @@ public class ApiController {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of(
                 "error", ex.getMessage(),
                 "status", "NOT_READY"
+        ));
+    }
+
+    @ExceptionHandler(SpeechTranscriptionException.class)
+    public ResponseEntity<Map<String, Object>> transcribeFailed(SpeechTranscriptionException ex) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of(
+                "error", ex.getMessage(),
+                "status", "TRANSCRIBE_FAILED"
         ));
     }
 

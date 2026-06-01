@@ -11,12 +11,12 @@ export function clearSessionToken() {
 }
 
 async function request(path, options = {}) {
-  const { skipAuthRecovery = false, headers = {}, ...fetchOptions } = options
+  const { skipAuthRecovery = false, headers = {}, rawBody = false, ...fetchOptions } = options
   const sessionToken = getSessionToken()
   const res = await fetch(`${BASE_URL}${path}`, {
     ...fetchOptions,
     headers: {
-      'Content-Type': 'application/json',
+      ...(rawBody ? {} : { 'Content-Type': 'application/json' }),
       ...(sessionToken ? { 'X-Session-Token': sessionToken } : {}),
       ...headers
     }
@@ -58,6 +58,16 @@ export function nearbyPois(payload) {
   return request('/api/nearby-pois', {
     method: 'POST',
     body: JSON.stringify(payload)
+  })
+}
+
+export function transcribeAudio(file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request('/api/speech/transcribe', {
+    method: 'POST',
+    body: formData,
+    rawBody: true
   })
 }
 
