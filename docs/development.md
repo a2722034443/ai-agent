@@ -93,6 +93,33 @@ Redis 协议检查：
 .\scripts\check-redis-native.ps1
 ```
 
+## 语音转文字配置
+
+语音输入由前端录音，后端统一调用 ASR provider。真实密钥只放在仓库根目录 `.env`，不要放入 `frontend/.env` 或任何 `VITE_` 变量。
+
+```env
+ASR_ENABLED=true
+ASR_PROVIDER=aliyun
+ALIYUN_ACCESS_KEY_ID=your-aliyun-access-key-id
+ALIYUN_ACCESS_KEY_SECRET=your-aliyun-access-key-secret
+ALIYUN_NLS_APP_KEY=your-aliyun-nls-app-key
+ASR_BASE_URL=https://nls-gateway-cn-shanghai.aliyuncs.com
+ASR_TOKEN_URL=https://nls-meta.cn-shanghai.aliyuncs.com
+ASR_AUDIO_FORMAT=wav
+ASR_SAMPLE_RATE=16000
+ASR_TIMEOUT_MS=15000
+ASR_MAX_AUDIO_MB=10
+ASR_MAX_DURATION_SECONDS=30
+```
+
+本地只验证链路时可设为：
+
+```env
+ASR_PROVIDER=mock
+```
+
+前端会把浏览器录音转为 `16kHz mono wav`，再上传到 `POST /api/speech/transcribe`。如果浏览器拒绝麦克风权限，页面会保留手动输入能力。
+
 ## 最小 HTTP 烟测
 
 创建 session：

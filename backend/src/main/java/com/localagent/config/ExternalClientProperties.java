@@ -7,6 +7,7 @@ public class ExternalClientProperties {
     private final Amap amap = new Amap();
     private final Search search = new Search();
     private final Llm llm = new Llm();
+    private final Asr asr = new Asr();
 
     public Amap getAmap() {
         return amap;
@@ -18,6 +19,10 @@ public class ExternalClientProperties {
 
     public Llm getLlm() {
         return llm;
+    }
+
+    public Asr getAsr() {
+        return asr;
     }
 
     public static class Amap {
@@ -123,5 +128,45 @@ public class ExternalClientProperties {
         public void setMaxTokens(int maxTokens) { this.maxTokens = maxTokens; }
         public int getTimeoutMs() { return timeoutMs; }
         public void setTimeoutMs(int timeoutMs) { this.timeoutMs = timeoutMs; }
+    }
+
+    public static class Asr {
+        private boolean enabled = true;
+        private String provider = "mock";
+        private String baseUrl = "https://nls-gateway-cn-shanghai.aliyuncs.com";
+        private String tokenUrl = "https://nls-meta.cn-shanghai.aliyuncs.com";
+        private String accessKeyId = "";
+        private String accessKeySecret = "";
+        private String appKey = "";
+        private String format = "wav";
+        private int sampleRate = 16000;
+        private int timeoutMs = 15000;
+        private int maxAudioMb = 10;
+        private int maxDurationSeconds = 30;
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public String getProvider() { return provider; }
+        public void setProvider(String provider) { this.provider = provider; }
+        public String getBaseUrl() { return baseUrl; }
+        public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
+        public String getTokenUrl() { return tokenUrl; }
+        public void setTokenUrl(String tokenUrl) { this.tokenUrl = tokenUrl; }
+        public String getAccessKeyId() { return accessKeyId; }
+        public void setAccessKeyId(String accessKeyId) { this.accessKeyId = accessKeyId; }
+        public String getAccessKeySecret() { return accessKeySecret; }
+        public void setAccessKeySecret(String accessKeySecret) { this.accessKeySecret = accessKeySecret; }
+        public String getAppKey() { return appKey; }
+        public void setAppKey(String appKey) { this.appKey = appKey; }
+        public String getFormat() { return format; }
+        public void setFormat(String format) { this.format = format; }
+        public int getSampleRate() { return sampleRate; }
+        public void setSampleRate(int sampleRate) { this.sampleRate = sampleRate; }
+        public int getTimeoutMs() { return timeoutMs; }
+        public void setTimeoutMs(int timeoutMs) { this.timeoutMs = timeoutMs; }
+        public int getMaxAudioMb() { return maxAudioMb; }
+        public void setMaxAudioMb(int maxAudioMb) { this.maxAudioMb = maxAudioMb; }
+        public int getMaxDurationSeconds() { return maxDurationSeconds; }
+        public void setMaxDurationSeconds(int maxDurationSeconds) { this.maxDurationSeconds = maxDurationSeconds; }
     }
 }

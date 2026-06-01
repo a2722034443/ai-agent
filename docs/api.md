@@ -203,6 +203,51 @@ Response:
 - READY 计划：返回重新生成或调整后的方案。
 - NEEDS_CLARIFICATION 计划：继续返回澄清字段。
 
+## POST /api/speech/transcribe
+
+语音转文字接口。用于前端语音输入按钮上传录音文件，后端调用 ASR 引擎后返回识别文本。
+
+Headers:
+
+```http
+X-Session-Token: <token>
+```
+
+Request:
+
+```http
+Content-Type: multipart/form-data
+file: voice.wav
+```
+
+前端当前会把浏览器录音转成 `16kHz mono wav` 后上传。不要在浏览器端暴露阿里云 AccessKey。
+
+Response:
+
+```json
+{
+  "text": "今天晚上七点在上海静安寺附近，四个朋友，预算八百，想先玩再吃饭",
+  "language": "zh",
+  "durationMs": 1200,
+  "engine": "aliyun",
+  "traceId": "speech_xxx"
+}
+```
+
+失败时返回：
+
+```json
+{
+  "status": "TRANSCRIBE_FAILED",
+  "error": "语音识别失败，请重试或直接输入文字"
+}
+```
+
+常见错误：
+
+- `INVALID_AUDIO`: 文件为空、过大或格式不支持。
+- `TRANSCRIBE_FAILED`: ASR provider 调用失败或未识别到有效文本。
+
 ## POST /api/collab/shares
 
 创建协同分享。

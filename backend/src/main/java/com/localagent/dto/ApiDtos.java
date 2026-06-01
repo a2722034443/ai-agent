@@ -35,6 +35,13 @@ public final class ApiDtos {
     public record ShareRequest(UUID planId, Integer selectedRank) {}
     public record VoteRequest(Integer rank, String voter) {}
     public record CommentRequest(String author, String text) {}
+    public record SpeechTranscribeResponse(
+            String text,
+            String language,
+            long durationMs,
+            String engine,
+            String traceId
+    ) {}
 
     public record PlanResponse(
             UUID planId,
