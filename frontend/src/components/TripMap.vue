@@ -1,8 +1,14 @@
 <template>
   <section class="trip-map-panel">
-    <div class="map-actions">
-      <button type="button" @click="collapsed = !collapsed">{{ collapsed ? '展开地图' : '折叠地图' }}</button>
-      <button type="button" @click="openInAmap">在高德APP打开</button>
+    <div class="map-head">
+      <div class="map-title">
+        <span class="map-sticker">路线地图</span>
+        <strong>把路线钉在这一页</strong>
+      </div>
+      <div class="map-actions">
+        <button type="button" @click="collapsed = !collapsed">{{ collapsed ? '展开地图' : '折叠地图' }}</button>
+        <button type="button" @click="openInAmap">在高德APP打开</button>
+      </div>
     </div>
 
     <div v-if="!collapsed" class="map-body">
@@ -392,38 +398,70 @@ onBeforeUnmount(() => {
   width: 100%;
   max-width: 100%;
   margin-top: 12px;
-  border-radius: 12px;
-  background: #fff;
-  box-shadow: 0 10px 24px rgba(91, 106, 150, .10);
+  border: 3px solid var(--ink-strong);
+  border-radius: 1.8rem;
+  background: linear-gradient(180deg, #fffef8 0%, #fff4df 100%);
+  box-shadow: var(--panel-shadow);
   overflow: hidden;
 }
 
+.map-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: .8rem;
+  padding: 1rem 1rem .75rem;
+}
+
+.map-title {
+  display: grid;
+  gap: .28rem;
+}
+
+.map-title strong {
+  font-size: 1.05rem;
+}
+
+.map-sticker {
+  width: fit-content;
+  border: 2px solid var(--ink-strong);
+  border-radius: 999px;
+  padding: .2rem .6rem;
+  background: #ffd995;
+  color: var(--ink-strong);
+  font-size: .76rem;
+  font-weight: 900;
+}
+
 .map-actions {
-  position: absolute;
-  z-index: 5;
-  top: 10px;
-  right: 10px;
   display: flex;
   gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .map-actions button,
 .map-error button {
-  min-height: 28px;
-  border: 0;
-  border-radius: 8px;
-  padding: 0 9px;
-  background: rgba(255,255,255,.92);
-  color: #334155;
-  box-shadow: 0 8px 18px rgba(91,106,150,.12);
-  font-size: 12px;
-  font-weight: 800;
+  min-height: 2.5rem;
+  border: 2px solid var(--ink-strong);
+  border-radius: .95rem;
+  padding: 0 .8rem;
+  background: rgba(255,255,255,.9);
+  color: var(--ink-strong);
+  box-shadow: 0 8px 18px rgba(111, 71, 50, .12);
+  font-size: .8rem;
+  font-weight: 900;
   cursor: pointer;
 }
 
 .map-body {
   position: relative;
-  height: 400px;
+  height: 420px;
+  margin: 0 .9rem .9rem;
+  border: 2px dashed rgba(111, 71, 50, .2);
+  border-radius: 1.4rem;
+  overflow: hidden;
+  background: rgba(255,255,255,.62);
 }
 
 .map-canvas,
@@ -442,9 +480,9 @@ onBeforeUnmount(() => {
   display: grid;
   place-items: center;
   background:
-    linear-gradient(90deg, rgba(248,250,252,.75), rgba(226,232,240,.88), rgba(248,250,252,.75)),
-    repeating-linear-gradient(0deg, transparent 0 38px, rgba(148,163,184,.18) 39px 40px),
-    repeating-linear-gradient(90deg, transparent 0 38px, rgba(148,163,184,.18) 39px 40px);
+    linear-gradient(90deg, rgba(255,250,241,.76), rgba(255, 221, 189, .92), rgba(255,250,241,.76)),
+    repeating-linear-gradient(0deg, transparent 0 38px, rgba(111,71,50,.11) 39px 40px),
+    repeating-linear-gradient(90deg, transparent 0 38px, rgba(111,71,50,.11) 39px 40px);
   background-size: 220px 100%, auto, auto;
   animation: map-shimmer 1.2s ease-in-out infinite;
 }
@@ -453,7 +491,7 @@ onBeforeUnmount(() => {
   width: 70px;
   height: 70px;
   border-radius: 50%;
-  border: 10px solid rgba(22,93,255,.12);
+  border: 10px solid rgba(140, 178, 255, .18);
 }
 
 .map-skeleton i {
@@ -461,7 +499,7 @@ onBeforeUnmount(() => {
   width: 56%;
   height: 6px;
   border-radius: 999px;
-  background: linear-gradient(90deg, #13b8a6, #ff7d00);
+  background: linear-gradient(90deg, #8cb2ff, #ff9368);
   transform: rotate(-12deg);
 }
 
@@ -472,16 +510,16 @@ onBeforeUnmount(() => {
   gap: 8px;
   padding: 28px;
   text-align: center;
-  background: #f8fafc;
+  background: #fff7ee;
 }
 
 .map-error strong {
-  color: #1d2436;
+  color: var(--ink-strong);
 }
 
 .map-error p {
   margin: 0;
-  color: #64748b;
+  color: #8c6752;
   font-size: 14px;
 }
 
@@ -497,12 +535,14 @@ onBeforeUnmount(() => {
 
 .unavailable-list span,
 .guard-notice {
-  border-radius: 8px;
+  border: 2px solid var(--ink-strong);
+  border-radius: 1rem;
   padding: 7px 10px;
-  background: rgba(255,255,255,.9);
-  color: #64748b;
-  box-shadow: 0 8px 18px rgba(91,106,150,.12);
+  background: rgba(255,250,241,.94);
+  color: #8c6752;
+  box-shadow: 0 8px 18px rgba(111,71,50,.12);
   font-size: 12px;
+  font-weight: 800;
 }
 
 :global(.amap-trip-marker) {
@@ -514,7 +554,7 @@ onBeforeUnmount(() => {
   padding: 6px 8px;
   border-radius: 999px;
   color: #fff;
-  box-shadow: 0 10px 22px rgba(15,23,42,.18), 0 0 0 4px rgba(255,255,255,.72);
+  box-shadow: 0 10px 22px rgba(111,71,50,.18), 0 0 0 4px rgba(255,255,255,.72);
   animation: marker-pop .3s cubic-bezier(.2, .9, .25, 1.2);
   white-space: nowrap;
 }
@@ -536,17 +576,18 @@ onBeforeUnmount(() => {
   font-weight: 900;
 }
 
-:global(.marker-origin) { background: #165dff; }
-:global(.marker-activity) { background: #13b8a6; }
-:global(.marker-dining) { background: #ff7d00; }
+:global(.marker-origin) { background: #5d87ef; }
+:global(.marker-activity) { background: #55b485; }
+:global(.marker-dining) { background: #ff9368; }
 
 :global(.amap-info-card) {
   width: 220px;
-  border-radius: 10px;
+  border: 2px solid #563321;
+  border-radius: 14px;
   padding: 10px;
-  background: rgba(255,255,255,.96);
-  box-shadow: 0 12px 26px rgba(15,23,42,.18);
-  color: #1d2436;
+  background: rgba(255,250,241,.96);
+  box-shadow: 0 12px 26px rgba(111,71,50,.18);
+  color: #563321;
 }
 
 :global(.amap-info-card strong) {
@@ -556,13 +597,13 @@ onBeforeUnmount(() => {
 
 :global(.amap-info-card p) {
   margin: 6px 0;
-  color: #64748b;
+  color: #8c6752;
   font-size: 12px;
   line-height: 1.45;
 }
 
 :global(.amap-info-card span) {
-  color: #334155;
+  color: #725542;
   font-size: 12px;
   line-height: 1.45;
 }
@@ -578,6 +619,15 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 760px) {
+  .map-head {
+    flex-direction: column;
+  }
+
+  .map-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
   .map-body {
     height: 300px;
   }
