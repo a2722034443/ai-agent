@@ -32,10 +32,11 @@ public class AmapPoiSearchTool {
     private static final String SEARCH_PATH = "/v3/place/text";
     private static final String AROUND_PATH = "/v3/place/around";
     private static final String GEOCODE_PATH = "/v3/geocode/geo";
-    private static final int MAX_KEYWORDS_PER_TYPE = 2;
+    private static final int MAX_KEYWORDS_PER_TYPE = 1;
     private static final int POI_OFFSET = 15;
     private static final int AROUND_RADIUS = 8000;
     private static final int MIN_DEDUPED_SIZE = 9;
+    private static final int MAX_REQUEST_TIMEOUT_MS = 1800;
 
     private final ExternalClientProperties properties;
     private final MockTools mockTools;
@@ -166,7 +167,7 @@ public class AmapPoiSearchTool {
                 + "&sortrule=distance&offset=" + Math.max(limit, 8)
                 + "&page=1&extensions=base");
         try {
-            Map<String, Object> body = sendAmapGet(uri, amap.getTimeoutMs());
+            Map<String, Object> body = sendAmapGet(uri, requestTimeoutMs(amap));
             return castList(body.get("pois")).stream()
                     .map(raw -> nearbyPoi(raw, category))
                     .filter(poi -> hasVisibleName(String.valueOf(poi.getOrDefault("name", ""))))
@@ -221,7 +222,7 @@ public class AmapPoiSearchTool {
 
         Map<String, Object> body = Map.of();
         for (int attempt = 0; attempt < 3; attempt++) {
-            body = sendAmapGet(uri, amap.getTimeoutMs());
+            body = sendAmapGet(uri, requestTimeoutMs(amap));
             if (!isQpsLimited(body)) {
                 break;
             }
@@ -270,7 +271,7 @@ public class AmapPoiSearchTool {
         HttpResponse<String> response;
         try {
             HttpRequest request = HttpRequest.newBuilder(uri)
-                    .timeout(Duration.ofMillis(amap.getTimeoutMs()))
+                    .timeout(Duration.ofMillis(requestTimeoutMs(amap)))
                     .GET()
                     .build();
             response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
@@ -432,6 +433,10 @@ public class AmapPoiSearchTool {
 
     private int clamp(int value, int min, int max) {
         return Math.max(min, Math.min(max, value));
+    }
+
+    private int requestTimeoutMs(ExternalClientProperties.Amap amap) {
+        return Math.min(amap.getTimeoutMs(), MAX_REQUEST_TIMEOUT_MS);
     }
 
     private boolean hasVisibleName(String value) {
