@@ -55,6 +55,25 @@ def main():
       model: {value(cfg, "MIMO_SECONDARY_MODEL")}
       max-tokens: {value(cfg, "MIMO_SECONDARY_MAX_TOKENS", 1024)}
       timeout-ms: {value(cfg, "MIMO_SECONDARY_TIMEOUT_MS", 4000)}
+  asr:
+    enabled: {str(value(cfg, "ASR_ENABLED", True)).lower()}
+    provider: {value(cfg, "ASR_PROVIDER", "mock")}
+    mock-provider: {value(cfg, "ASR_MOCK_PROVIDER", "mock")}
+    aliyun-provider: {value(cfg, "ASR_ALIYUN_PROVIDER", "aliyun")}
+    base-url: {value(cfg, "ASR_BASE_URL", "https://nls-gateway-cn-shanghai.aliyuncs.com")}
+    token-url: {value(cfg, "ASR_TOKEN_URL", "https://nls-meta.cn-shanghai.aliyuncs.com")}
+    token-action: {value(cfg, "ASR_TOKEN_ACTION", "CreateToken")}
+    token-version: {value(cfg, "ASR_TOKEN_VERSION", "2019-02-28")}
+    token-timestamp-pattern: "{value(cfg, "ASR_TOKEN_TIMESTAMP_PATTERN", "yyyy-MM-dd'T'HH:mm:ss'Z'")}"
+    success-status: {value(cfg, "ASR_SUCCESS_STATUS", "20000000")}
+    access-key-id: {value(cfg, "ALIYUN_ACCESS_KEY_ID")}
+    access-key-secret: {value(cfg, "ALIYUN_ACCESS_KEY_SECRET")}
+    app-key: {value(cfg, "ALIYUN_NLS_APP_KEY")}
+    format: {value(cfg, "ASR_AUDIO_FORMAT", "wav")}
+    sample-rate: {value(cfg, "ASR_SAMPLE_RATE", 16000)}
+    timeout-ms: {value(cfg, "ASR_TIMEOUT_MS", 15000)}
+    max-audio-mb: {value(cfg, "ASR_MAX_AUDIO_MB", 10)}
+    max-duration-seconds: {value(cfg, "ASR_MAX_DURATION_SECONDS", 30)}
 """,
         encoding="utf-8",
     )

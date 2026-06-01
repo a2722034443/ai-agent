@@ -63,8 +63,14 @@ external:
   asr:
     enabled: ${ASR_ENABLED:true}
     provider: ${ASR_PROVIDER:mock}
+    mock-provider: ${ASR_MOCK_PROVIDER:mock}
+    aliyun-provider: ${ASR_ALIYUN_PROVIDER:aliyun}
     base-url: ${ASR_BASE_URL:https://nls-gateway-cn-shanghai.aliyuncs.com}
     token-url: ${ASR_TOKEN_URL:https://nls-meta.cn-shanghai.aliyuncs.com}
+    token-action: ${ASR_TOKEN_ACTION:CreateToken}
+    token-version: "${ASR_TOKEN_VERSION:2019-02-28}"
+    token-timestamp-pattern: "${ASR_TOKEN_TIMESTAMP_PATTERN:yyyy-MM-dd'T'HH:mm:ss'Z'}"
+    success-status: "${ASR_SUCCESS_STATUS:20000000}"
     access-key-id: ${ALIYUN_ACCESS_KEY_ID:}
     access-key-secret: ${ALIYUN_ACCESS_KEY_SECRET:}
     app-key: ${ALIYUN_NLS_APP_KEY:}

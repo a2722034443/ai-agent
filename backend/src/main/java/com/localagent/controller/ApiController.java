@@ -24,6 +24,7 @@ import java.util.NoSuchElementException;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -33,8 +34,6 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.multipart.support.MissingServletRequestPartException;
-import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.multipart.MultipartFile;
 
 @RestController
@@ -135,14 +134,6 @@ public class ApiController {
         ));
     }
 
-    @ExceptionHandler({MultipartException.class, MissingServletRequestPartException.class})
-    public ResponseEntity<Map<String, Object>> invalidMultipart(Exception ex) {
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of(
-                "error", "音频文件不能为空",
-                "status", "INVALID_AUDIO"
-        ));
-    }
-
     @ExceptionHandler(NoSuchElementException.class)
     public ResponseEntity<Map<String, Object>> notFound(NoSuchElementException ex) {
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
@@ -179,7 +170,10 @@ public class ApiController {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<Map<String, Object>> serverError(Exception ex) {
+    public ResponseEntity<Map<String, Object>> serverError(Exception ex) throws Exception {
+        if (ex instanceof ErrorResponse) {
+            throw ex;
+        }
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
                 "error", "系统暂时不可用，请稍后重试",
                 "status", "ERROR"
