@@ -48,6 +48,7 @@ class ApiControllerBlockingTest {
         String token = objectMapper.readTree(sessionResult.getResponse().getContentAsString()).get("token").asText();
 
         mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", "client-test")
                         .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content("{\"message\":\"今天下午2点在大连星海广场附近，两个大人一个孩子，预算600元，想安排亲子活动和晚餐，时间4小时左右\"}"))

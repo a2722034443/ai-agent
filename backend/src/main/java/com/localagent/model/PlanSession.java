@@ -16,12 +16,22 @@ public class PlanSession {
     @Id
     private UUID id;
 
+    @Column(nullable = false, columnDefinition = "BINARY(16)")
+    private UUID threadId;
+
+    @Column(columnDefinition = "BINARY(16)")
+    private UUID parentPlanSessionId;
+
     @Column(nullable = false)
     private String sessionToken;
 
     @Lob
     @Column(nullable = false, columnDefinition = "TEXT")
     private String rawInput;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 32, columnDefinition = "varchar(32)")
+    private PlanTurnType turnType;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 32, columnDefinition = "varchar(32)")
@@ -45,11 +55,15 @@ public class PlanSession {
     public PlanSession() {
     }
 
-    public static PlanSession create(String token, String rawInput) {
+    public static PlanSession create(UUID threadId, UUID parentPlanSessionId, PlanTurnType turnType,
+                                     String token, String rawInput) {
         PlanSession session = new PlanSession();
         session.id = UUID.randomUUID();
+        session.threadId = threadId;
+        session.parentPlanSessionId = parentPlanSessionId;
         session.sessionToken = token;
         session.rawInput = rawInput;
+        session.turnType = turnType;
         session.status = PlanStatus.PLANNING;
         session.createdAt = Instant.now();
         session.updatedAt = session.createdAt;
@@ -57,8 +71,11 @@ public class PlanSession {
     }
 
     public UUID getId() { return id; }
+    public UUID getThreadId() { return threadId; }
+    public UUID getParentPlanSessionId() { return parentPlanSessionId; }
     public String getSessionToken() { return sessionToken; }
     public String getRawInput() { return rawInput; }
+    public PlanTurnType getTurnType() { return turnType; }
     public PlanStatus getStatus() { return status; }
     public String getIntentJson() { return intentJson; }
     public String getResultJson() { return resultJson; }
