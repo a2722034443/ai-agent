@@ -6,16 +6,21 @@ import com.localagent.dto.ApiDtos.FeedbackRequest;
 import com.localagent.dto.ApiDtos.NearbyPoiRequest;
 import com.localagent.dto.ApiDtos.PlanRequest;
 import com.localagent.dto.ApiDtos.PlanResponse;
+import com.localagent.dto.ApiDtos.RenameThreadRequest;
 import com.localagent.dto.ApiDtos.SessionRequest;
 import com.localagent.dto.ApiDtos.SessionResponse;
 import com.localagent.dto.ApiDtos.ShareRequest;
+import com.localagent.dto.ApiDtos.ThreadDetailResponse;
+import com.localagent.dto.ApiDtos.ThreadSummaryResponse;
 import com.localagent.dto.ApiDtos.VoteRequest;
 import com.localagent.service.AmapPoiSearchTool;
 import com.localagent.service.CollaborationMockService;
+import com.localagent.service.HistoryService;
 import com.localagent.service.PlanBlockedException;
 import com.localagent.service.PlanningService;
 import com.localagent.service.SessionAuthException;
 import com.localagent.service.SessionService;
+import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.UUID;
@@ -23,6 +28,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -37,14 +44,17 @@ public class ApiController {
     private final PlanningService planningService;
     private final AmapPoiSearchTool poiSearchTool;
     private final CollaborationMockService collaborationMockService;
+    private final HistoryService historyService;
 
     public ApiController(SessionService sessionService, PlanningService planningService,
                          AmapPoiSearchTool poiSearchTool,
-                         CollaborationMockService collaborationMockService) {
+                         CollaborationMockService collaborationMockService,
+                         HistoryService historyService) {
         this.sessionService = sessionService;
         this.planningService = planningService;
         this.poiSearchTool = poiSearchTool;
         this.collaborationMockService = collaborationMockService;
+        this.historyService = historyService;
     }
 
     @PostMapping("/sessions")
@@ -53,9 +63,11 @@ public class ApiController {
     }
 
     @PostMapping("/plans")
-    public PlanResponse createPlan(@RequestHeader("X-Session-Token") String token, @RequestBody PlanRequest request) {
+    public PlanResponse createPlan(@RequestHeader("X-Session-Token") String token,
+                                   @RequestHeader("X-Client-Id") String clientId,
+                                   @RequestBody PlanRequest request) {
         sessionService.validate(token);
-        return planningService.createPlan(token, request);
+        return planningService.createPlan(token, clientId, request);
     }
 
     @PostMapping("/nearby-pois")
@@ -71,13 +83,52 @@ public class ApiController {
     }
 
     @PostMapping("/plans/{id}/confirm")
-    public PlanResponse confirm(@PathVariable UUID id, @RequestBody ConfirmRequest request) {
-        return planningService.confirm(id, request.rank());
+    public PlanResponse confirm(@RequestHeader("X-Session-Token") String token,
+                                @RequestHeader("X-Client-Id") String clientId,
+                                @PathVariable UUID id, @RequestBody ConfirmRequest request) {
+        sessionService.validate(token);
+        return planningService.confirm(id, clientId, request.rank());
     }
 
     @PostMapping("/plans/{id}/feedback")
-    public PlanResponse feedback(@PathVariable UUID id, @RequestBody FeedbackRequest request) {
-        return planningService.feedback(id, request.message());
+    public PlanResponse feedback(@RequestHeader("X-Session-Token") String token,
+                                 @RequestHeader("X-Client-Id") String clientId,
+                                 @PathVariable UUID id, @RequestBody FeedbackRequest request) {
+        sessionService.validate(token);
+        return planningService.feedback(id, clientId, request.message());
+    }
+
+    @GetMapping("/history/threads")
+    public List<ThreadSummaryResponse> historyThreads(@RequestHeader("X-Session-Token") String token,
+                                                      @RequestHeader("X-Client-Id") String clientId) {
+        sessionService.validate(token);
+        return historyService.listThreads(clientId);
+    }
+
+    @GetMapping("/history/threads/{id}")
+    public ThreadDetailResponse historyThread(@RequestHeader("X-Session-Token") String token,
+                                              @RequestHeader("X-Client-Id") String clientId,
+                                              @PathVariable UUID id) {
+        sessionService.validate(token);
+        return historyService.getThread(clientId, id);
+    }
+
+    @PatchMapping("/history/threads/{id}")
+    public ThreadDetailResponse renameHistoryThread(@RequestHeader("X-Session-Token") String token,
+                                                    @RequestHeader("X-Client-Id") String clientId,
+                                                    @PathVariable UUID id,
+                                                    @RequestBody RenameThreadRequest request) {
+        sessionService.validate(token);
+        return historyService.renameThread(clientId, id, request == null ? null : request.title());
+    }
+
+    @DeleteMapping("/history/threads/{id}")
+    public Map<String, Object> deleteHistoryThread(@RequestHeader("X-Session-Token") String token,
+                                                   @RequestHeader("X-Client-Id") String clientId,
+                                                   @PathVariable UUID id) {
+        sessionService.validate(token);
+        historyService.deleteThread(clientId, id);
+        return Map.of("ok", true);
     }
 
     @PostMapping("/collab/shares")
