@@ -39,6 +39,7 @@ class PlanningServiceTest {
                         null,
                         null,
                         Map.of("group", "两个大人一个孩子", "timeWindow", "14:00"),
+                        null,
                         null
                 )
         );
@@ -91,6 +92,7 @@ class PlanningServiceTest {
                                 "excludedPois", List.of("家庭海鲜餐厅", "四人烧烤餐厅", "大连科学剧场",
                                         "沉浸式密室", "新影艺术馆", "甜品补给站")
                         ),
+                        null,
                         null
                 )
         );

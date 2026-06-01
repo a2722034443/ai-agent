@@ -4,10 +4,14 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.localagent.dto.ApiDtos.PlanRequest;
 import com.localagent.dto.ApiDtos.PlanResponse;
+import com.localagent.model.ChatMessage;
+import com.localagent.model.ChatMessageKind;
 import com.localagent.model.FeedbackEvent;
 import com.localagent.model.PlanOption;
 import com.localagent.model.PlanSession;
 import com.localagent.model.PlanStatus;
+import com.localagent.model.PlanThread;
+import com.localagent.model.PlanTurnType;
 import com.localagent.model.Poi;
 import com.localagent.model.PoiType;
 import com.localagent.model.ToolCallLog;
@@ -42,7 +46,7 @@ public class PlanningService {
     private static final double WALKING_DIRECT_PREFILTER_KM = 4.0;
     private static final double MIXED_DIRECT_PREFILTER_KM = 12.5;
     private static final double DRIVING_DIRECT_PREFILTER_KM = 28.0;
-    private static final int MAX_ROUTE_ATTEMPTS = 8;
+    private static final int MAX_ROUTE_ATTEMPTS = 4;
 
     private final PlanSessionRepository planSessionRepository;
     private final PlanOptionRepository planOptionRepository;
@@ -58,6 +62,7 @@ public class PlanningService {
     private final PlanValidationService planValidationService;
     private final PromptCatalog promptCatalog;
     private final ToolTraceService toolTraceService;
+    private final HistoryService historyService;
     private final ObjectMapper objectMapper;
     private final boolean allowMockPoi;
     private final ExecutorService optionalToolExecutor = Executors.newFixedThreadPool(4);
@@ -76,6 +81,7 @@ public class PlanningService {
                            PlanValidationService planValidationService,
                            PromptCatalog promptCatalog,
                            ToolTraceService toolTraceService,
+                           HistoryService historyService,
                            ObjectMapper objectMapper,
                            @Value("${app.allow-mock-poi:false}") boolean allowMockPoi) {
         this.planSessionRepository = planSessionRepository;
@@ -92,28 +98,52 @@ public class PlanningService {
         this.planValidationService = planValidationService;
         this.promptCatalog = promptCatalog;
         this.toolTraceService = toolTraceService;
+        this.historyService = historyService;
         this.objectMapper = objectMapper;
         this.allowMockPoi = allowMockPoi;
     }
 
+    public PlanResponse createPlan(String token, String clientId, PlanRequest request) {
+        return createPlanInternal(token, clientId, request, turnTypeFor(request));
+    }
+
     public PlanResponse createPlan(String token, PlanRequest request) {
-        String message = request == null ? "" : request.message();
-        PlanSession session = planSessionRepository.save(PlanSession.create(token, message));
-        Map<String, Object> intent = buildIntent(session.getId(), request, message);
-        intent = clarificationService.mergeAnswers(intent, request == null ? null : request.clarificationAnswers());
-        applyRequestPreferences(intent, request);
-        ensurePoiSearchStrategy(intent);
-        Map<String, Object> clarification = clarificationService.buildClarification(session.getId(), intent, message);
-        if (!clarification.isEmpty()) {
-            Map<String, Object> result = new LinkedHashMap<>();
-            result.put("options", List.of());
-            result.put("clarification", clarification);
-            result.put("warnings", List.of("信息补齐前不会查询真实地点，也不会生成方案。"));
-            session.markNeedsClarification(toJson(intent), toJson(result));
-            planSessionRepository.save(session);
-            return toResponse(session.getId());
+        return createPlan(token, "test-client", request);
+    }
+
+    private PlanResponse createPlanInternal(String token, String clientId, PlanRequest request, PlanTurnType turnType) {
+        String message = request == null || request.message() == null ? "" : request.message().trim();
+        PlanThread thread = request != null && request.threadId() != null
+                ? historyService.requireThread(request.threadId(), clientId)
+                : historyService.createThread(clientId, message);
+        UUID parentPlanSessionId = request == null ? null : request.previousPlanId();
+        if (!message.isBlank()) {
+            historyService.appendUserText(thread.getId(), parentPlanSessionId, message);
         }
+        PlanSession session = planSessionRepository.save(
+                PlanSession.create(thread.getId(), parentPlanSessionId, turnType, token, message)
+        );
+        historyService.markLatestPlanSession(thread, session.getId());
         try {
+            Map<String, Object> intent = buildIntent(session.getId(), request, message);
+            intent = clarificationService.mergeAnswers(intent, request == null ? null : request.clarificationAnswers());
+            applyRequestPreferences(intent, request);
+            ensurePoiSearchStrategy(intent);
+            Map<String, Object> clarification = clarificationService.buildClarification(session.getId(), intent, message);
+            if (!clarification.isEmpty()) {
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("options", List.of());
+                result.put("clarification", clarification);
+                result.put("warnings", List.of("信息补齐前不会查询真实地点，也不会生成方案。"));
+                session.markNeedsClarification(toJson(intent), toJson(result));
+                planSessionRepository.save(session);
+                ChatMessage assistant = historyService.appendAssistant(thread.getId(), session.getId(), parentPlanSessionId,
+                        ChatMessageKind.ASSISTANT_CLARIFICATION,
+                        "还需要补齐几个关键信息，补齐后我再查询真实地点并生成方案。",
+                        clarificationPayload(session.getId(), intent, clarification, result));
+                return toResponse(session.getId(), assistant.getId());
+            }
+
             Map<String, Object> planningIntent = intent;
             String planningMessage = message;
             CompletableFuture<Map<String, Object>> weatherFuture = CompletableFuture.supplyAsync(
@@ -140,20 +170,52 @@ public class PlanningService {
             for (Map<String, Object> option : options) {
                 planOptionRepository.save(new PlanOption(session.getId(), ((Number) option.get("rank")).intValue(), toJson(option)));
             }
-            return toResponse(session.getId());
+            ChatMessage assistant = historyService.appendAssistant(thread.getId(), session.getId(), parentPlanSessionId,
+                    ChatMessageKind.ASSISTANT_PLAN_RESULT,
+                    turnType == PlanTurnType.CLARIFICATION
+                            ? "信息补齐了，已生成 3 套方案，下面展开查看地图和路线。"
+                            : "方案已生成，下面展开查看地图和路线。",
+                    planResultPayload(session.getId(), intent, result, Map.of(), "chat", "plans"));
+            return toResponse(session.getId(), assistant.getId());
+        } catch (RuntimeException ex) {
+            historyService.appendAssistant(thread.getId(), session.getId(), parentPlanSessionId,
+                    ChatMessageKind.ASSISTANT_ERROR,
+                    userFacingError(ex),
+                    Map.of(
+                            "status", statusOf(ex),
+                            "provider", providerOf(ex),
+                            "rawError", ex.getMessage() == null ? ex.getClass().getSimpleName() : ex.getMessage()
+                    ));
+            throw ex;
         } finally {
             routeEstimateTool.clearCache(session.getId());
         }
     }
 
+    private PlanTurnType turnTypeFor(PlanRequest request) {
+        if (request == null || request.previousPlanId() == null) {
+            return PlanTurnType.INITIAL;
+        }
+        return PlanTurnType.CLARIFICATION;
+    }
+
     private Map<String, Object> buildIntent(UUID planId, PlanRequest request, String message) {
-        Map<String, Object> parsed = intentParserAgent.parse(planId, message);
+        Map<String, Object> parsed = shouldSkipIntentParse(request)
+                ? new LinkedHashMap<>()
+                : intentParserAgent.parse(planId, message);
         Map<String, Object> previous = previousIntent(request);
         Map<String, Object> intent = mergeIntent(previous, parsed);
         String rawMessage = rawMessage(previous, message);
         intent.put("rawMessage", rawMessage);
         clarificationService.ensureUserFacts(intent, rawMessage);
         return intent;
+    }
+
+    private boolean shouldSkipIntentParse(PlanRequest request) {
+        return request != null
+                && request.previousPlanId() != null
+                && request.clarificationAnswers() != null
+                && !request.clarificationAnswers().isEmpty();
     }
 
     private Map<String, Object> previousIntent(PlanRequest request) {
@@ -236,7 +298,7 @@ public class PlanningService {
     }
 
     public PlanResponse createPlan(String token, String message) {
-        return createPlan(token, new PlanRequest(message, null, null, null, null));
+        return createPlan(token, "test-client", new PlanRequest(message, null, null, null, null, null));
     }
 
     @Transactional(readOnly = true)
@@ -256,7 +318,13 @@ public class PlanningService {
 
     @Transactional
     public PlanResponse confirm(UUID id, int rank) {
+        return confirm(id, "test-client", rank);
+    }
+
+    @Transactional
+    public PlanResponse confirm(UUID id, String clientId, int rank) {
         PlanSession session = planSessionRepository.findById(id).orElseThrow();
+        PlanThread thread = historyService.requireThread(session.getThreadId(), clientId);
         if (session.getStatus() != PlanStatus.READY && session.getStatus() != PlanStatus.COMPLETED) {
             throw new IllegalStateException("方案尚未生成完成，暂不能确认执行");
         }
@@ -273,18 +341,32 @@ public class PlanningService {
         execution.put("allSuccess", true);
         session.markCompleted(toJson(execution));
         planSessionRepository.save(session);
-        return toResponse(id);
+        ChatMessage assistant = historyService.appendAssistant(thread.getId(), session.getId(), session.getParentPlanSessionId(),
+                ChatMessageKind.ASSISTANT_PLAN_RESULT,
+                "已确认执行，门票、订座和分享消息都已安排。",
+                confirmPayload(session, execution));
+        return toResponse(id, assistant.getId());
     }
 
     public PlanResponse feedback(UUID id, String message) {
+        return feedback(id, "test-client", message);
+    }
+
+    public PlanResponse feedback(UUID id, String clientId, String message) {
         PlanSession previous = planSessionRepository.findById(id).orElseThrow();
+        historyService.requireThread(previous.getThreadId(), clientId);
         feedbackEventRepository.save(new FeedbackEvent(id, message));
         Map<String, Object> previousIntent = fromJson(previous.getIntentJson());
         Map<String, Object> previousOption = findOptionOrEmpty(id, 1);
         Map<String, Object> patch = feedbackPatch(id, message, previousIntent, previousOption);
-        String combined = previous.getRawInput() + "。用户调整：" + message;
-        return createPlan(previous.getSessionToken(), new PlanRequest(combined, intValue(patch.get("requestedPlanCount")),
-                stringValue(patch.get("stopCountPreference")), patch, previous.getId()));
+        return createPlanInternal(previous.getSessionToken(), clientId, new PlanRequest(
+                stringValue(message),
+                intValue(patch.get("requestedPlanCount")),
+                stringValue(patch.get("stopCountPreference")),
+                patch,
+                previous.getId(),
+                previous.getThreadId()
+        ), PlanTurnType.FEEDBACK);
     }
 
     Map<String, Object> analyzeIntent(String message) {
@@ -992,7 +1074,98 @@ public class PlanningService {
         return null;
     }
 
+    private String userFacingError(RuntimeException ex) {
+        if (ex instanceof PlanBlockedException blocked && blocked.getMessage() != null && !blocked.getMessage().isBlank()) {
+            return blocked.getMessage();
+        }
+        if (ex instanceof IllegalArgumentException || ex instanceof IllegalStateException) {
+            return ex.getMessage();
+        }
+        return "抱歉，刚刚网络有点小问题，要不要再试一次？";
+    }
+
+    private String statusOf(RuntimeException ex) {
+        if (ex instanceof PlanBlockedException) {
+            return "BLOCKED";
+        }
+        if (ex instanceof IllegalArgumentException) {
+            return "INVALID_REQUEST";
+        }
+        if (ex instanceof IllegalStateException) {
+            return "NOT_READY";
+        }
+        return "ERROR";
+    }
+
+    private String providerOf(RuntimeException ex) {
+        if (ex instanceof PlanBlockedException blocked && blocked.getProvider() != null) {
+            return blocked.getProvider();
+        }
+        return "local";
+    }
+
+    private Map<String, Object> clarificationPayload(UUID planId, Map<String, Object> intent,
+                                                     Map<String, Object> clarification, Map<String, Object> result) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("planId", planId);
+        payload.put("intent", intent);
+        payload.put("clarification", clarification);
+        payload.put("warnings", result.getOrDefault("warnings", List.of()));
+        payload.put("currentView", "chat");
+        payload.put("currentStep", "clarify");
+        payload.put("mapOrigin", fromAny(intent.get("location")));
+        return payload;
+    }
+
+    private Map<String, Object> planResultPayload(UUID planId, Map<String, Object> intent, Map<String, Object> result,
+                                                  Map<String, Object> execution, String currentView, String currentStep) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("planId", planId);
+        payload.put("intent", intent);
+        payload.put("options", result.getOrDefault("options", List.of()));
+        payload.put("clarification", result.getOrDefault("clarification", Map.of()));
+        payload.put("weather", result.getOrDefault("weather", Map.of()));
+        payload.put("warnings", result.getOrDefault("warnings", List.of()));
+        payload.put("execution", execution);
+        payload.put("currentView", currentView);
+        payload.put("currentStep", currentStep);
+        payload.put("mapOrigin", fromAny(intent.get("location")));
+        if (!execution.isEmpty()) {
+            payload.put("executionSteps", executionSteps(execution));
+        }
+        return payload;
+    }
+
+    private Map<String, Object> confirmPayload(PlanSession session, Map<String, Object> execution) {
+        Map<String, Object> intent = fromJson(session.getIntentJson());
+        Map<String, Object> result = fromJson(session.getResultJson());
+        return planResultPayload(session.getId(), intent, result, execution, "execute", "plans");
+    }
+
+    private List<Map<String, Object>> executionSteps(Map<String, Object> execution) {
+        List<Map<String, Object>> steps = new ArrayList<>();
+        List<Map<String, Object>> orders = castList(execution.get("orders"));
+        for (Map<String, Object> order : orders) {
+            steps.add(Map.of(
+                    "name", String.valueOf(order.getOrDefault("targetName", "执行事项")),
+                    "status", "done"
+            ));
+        }
+        Map<String, Object> gift = fromAny(execution.get("gift"));
+        if (!gift.isEmpty()) {
+            steps.add(Map.of("name", String.valueOf(gift.getOrDefault("targetName", "礼物配送已安排")), "status", "done"));
+        }
+        if (execution.get("shareMessage") != null) {
+            steps.add(Map.of("name", "分享消息已生成", "status", "done"));
+        }
+        return steps;
+    }
+
     private PlanResponse toResponse(UUID id) {
+        return toResponse(id, null);
+    }
+
+    private PlanResponse toResponse(UUID id, UUID assistantMessageId) {
         PlanSession session = planSessionRepository.findById(id).orElseThrow();
         Map<String, Object> intent = fromJson(session.getIntentJson());
         Map<String, Object> result = fromJson(session.getResultJson());
@@ -1003,8 +1176,9 @@ public class PlanningService {
         List<Map<String, Object>> trace = toolCallLogRepository.findByPlanSessionIdOrderByCreatedAt(id).stream()
                 .map(this::tracePayload)
                 .toList();
-        return new PlanResponse(id, session.getStatus().name(), intent, options, trace, fromJson(session.getExecutionJson()),
-                clarification, weather, warnings.stream().map(this::warningText).toList());
+        return new PlanResponse(id, session.getThreadId(), session.getStatus().name(), intent, options, trace,
+                fromJson(session.getExecutionJson()), clarification, weather,
+                warnings.stream().map(this::warningText).toList(), assistantMessageId);
     }
 
     private String warningText(Map<String, Object> warning) {
