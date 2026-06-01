@@ -201,11 +201,9 @@
         />
       </label>
       <button type="button" :class="{ active: voiceRecording }" @click="toggleVoice">语音</button>
-      <button type="button" @click="openImageTool">图片</button>
       <button class="primary-button" type="button" :disabled="!message.trim() || loading" @click="plan">
         {{ loading ? '规划中' : '规划' }}
       </button>
-      <input ref="fileInput" class="hidden-file" type="file" accept="image/*" @change="handleImagePick" />
     </footer>
   </main>
 </template>
@@ -219,7 +217,6 @@ const token = ref(localStorage.getItem('lla_token') || '')
 const message = ref('')
 const loading = ref(false)
 const voiceRecording = ref(false)
-const fileInput = ref(null)
 const activeView = ref('chat')
 const currentStep = ref('need')
 const messages = ref([])
@@ -712,17 +709,6 @@ async function createShareLink() {
 function toggleVoice() {
   voiceRecording.value = !voiceRecording.value
   if (voiceRecording.value) message.value = '今天下午带老婆孩子出去玩，别离家太远，老婆最近在减肥。'
-}
-
-function openImageTool() {
-  fileInput.value?.click()
-}
-
-function handleImagePick(event) {
-  const file = event.target.files?.[0]
-  if (!file) return
-  message.value = `我上传了一张图片 ${file.name}，想按图片里的风格找附近可玩的地点。`
-  event.target.value = ''
 }
 
 function copyShareMessage() {
@@ -1574,10 +1560,6 @@ input {
   color: #334155;
   font-size: 14px;
   font-weight: 800;
-}
-
-.hidden-file {
-  display: none;
 }
 
 @media (min-width: 768px) {
