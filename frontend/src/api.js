@@ -1,9 +1,18 @@
 const BASE_URL = import.meta.env.VITE_API_URL || ''
 const TOKEN_KEY = 'lla_token'
+const CLIENT_KEY = 'lla_client_id'
 const DEFAULT_NICKNAME = '立刻游用户'
 
 export function getSessionToken() {
   return localStorage.getItem(TOKEN_KEY) || ''
+}
+
+export function getClientId() {
+  const existing = localStorage.getItem(CLIENT_KEY)
+  if (existing) return existing
+  const created = crypto.randomUUID()
+  localStorage.setItem(CLIENT_KEY, created)
+  return created
 }
 
 export function clearSessionToken() {
@@ -18,6 +27,7 @@ async function request(path, options = {}) {
     headers: {
       'Content-Type': 'application/json',
       ...(sessionToken ? { 'X-Session-Token': sessionToken } : {}),
+      'X-Client-Id': getClientId(),
       ...headers
     }
   })
@@ -102,4 +112,23 @@ export function getMemory() {
 
 export function getGuardStatus() {
   return request('/api/guard/status', { method: 'GET' })
+}
+
+export function getHistoryThreads() {
+  return request('/api/history/threads', { method: 'GET' })
+}
+
+export function getHistoryThread(threadId) {
+  return request(`/api/history/threads/${threadId}`, { method: 'GET' })
+}
+
+export function renameHistoryThread(threadId, title) {
+  return request(`/api/history/threads/${threadId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ title })
+  })
+}
+
+export function deleteHistoryThread(threadId) {
+  return request(`/api/history/threads/${threadId}`, { method: 'DELETE' })
 }

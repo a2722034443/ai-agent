@@ -16,7 +16,8 @@ public final class ApiDtos {
             Integer planCount,
             String stopCountPreference,
             Map<String, Object> clarificationAnswers,
-            UUID previousPlanId
+            UUID previousPlanId,
+            UUID threadId
     ) {}
     public record NearbyPoiRequest(
             Double lng,
@@ -35,9 +36,11 @@ public final class ApiDtos {
     public record ShareRequest(UUID planId, Integer selectedRank) {}
     public record VoteRequest(Integer rank, String voter) {}
     public record CommentRequest(String author, String text) {}
+    public record RenameThreadRequest(String title) {}
 
     public record PlanResponse(
             UUID planId,
+            UUID threadId,
             String status,
             Map<String, Object> intent,
             List<Map<String, Object>> options,
@@ -45,6 +48,35 @@ public final class ApiDtos {
             Map<String, Object> execution,
             Map<String, Object> clarification,
             Map<String, Object> weather,
-            List<String> warnings
+            List<String> warnings,
+            UUID assistantMessageId
+    ) {}
+
+    public record ThreadSummaryResponse(
+            UUID threadId,
+            String title,
+            String lastMessagePreview,
+            Instant lastMessageAt,
+            String lastStatus
+    ) {}
+
+    public record ChatMessageResponse(
+            UUID id,
+            UUID threadId,
+            UUID planSessionId,
+            String role,
+            String kind,
+            String text,
+            Map<String, Object> payload,
+            long sequenceNo,
+            Instant createdAt
+    ) {}
+
+    public record ThreadDetailResponse(
+            UUID threadId,
+            String title,
+            Instant createdAt,
+            Instant updatedAt,
+            List<ChatMessageResponse> messages
     ) {}
 }

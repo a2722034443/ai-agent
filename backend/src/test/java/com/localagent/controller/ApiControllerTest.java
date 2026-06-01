@@ -2,7 +2,9 @@ package com.localagent.controller;
 
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -28,6 +30,8 @@ import org.springframework.test.web.servlet.MvcResult;
 @ActiveProfiles("test")
 @TestPropertySource(properties = "external.amap.default-origin=121.588000,38.883000")
 class ApiControllerTest {
+    private static final String CLIENT_ID = "client-test";
+
     @Autowired
     private MockMvc mockMvc;
     @Autowired
@@ -45,6 +49,7 @@ class ApiControllerTest {
     @Test
     void rejectsMissingSessionToken() throws Exception {
         mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
                         .header("X-Session-Token", "missing")
                         .contentType("application/json")
                         .content("{\"message\":\"afternoon plan\"}"))
@@ -74,6 +79,7 @@ class ApiControllerTest {
         String token = extractJsonString(sessionResult, "token");
 
         mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
                         .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content("{\"message\":\"想今天出去玩一下\"}"))
@@ -106,6 +112,7 @@ class ApiControllerTest {
 
         String message = "今天晚上 7 点在上海静安寺附近，4 个朋友，预算 800 元，想先找一个有意思的地方再吃饭，路线不要太折腾。";
         mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
                         .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(Map.of(
@@ -135,6 +142,7 @@ class ApiControllerTest {
 
         String message = "今天晚上 7 点在上海静安寺附近，4 个朋友，预算 800 元，想先找一个有意思的地方再吃饭，路线不要太折腾。";
         MvcResult firstResult = mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
                         .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content(objectMapper.writeValueAsString(Map.of(
@@ -157,6 +165,7 @@ class ApiControllerTest {
         ));
 
         mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
                         .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content(secondBody))
@@ -188,6 +197,7 @@ class ApiControllerTest {
         String token = extractJsonString(sessionResult, "token");
 
         mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
                         .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content("{\"message\":\"我想在我附近 和朋友玩 你看看附近都有啥 推荐一下\"}"))
@@ -218,6 +228,7 @@ class ApiControllerTest {
 
         String message = "今天下午在大连星海广场附近，两个大人一个孩子，预算600元，想安排亲子活动和晚餐，时间4小时左右";
         mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
                         .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content("{\"message\":\"" + message + "\"}"))
@@ -256,6 +267,7 @@ class ApiControllerTest {
                 """;
 
         mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
                         .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content(body))
@@ -324,6 +336,7 @@ class ApiControllerTest {
                 """;
 
         mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
                         .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content(body))
@@ -371,6 +384,7 @@ class ApiControllerTest {
                 """;
 
         mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
                         .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content(body))
@@ -409,6 +423,7 @@ class ApiControllerTest {
                 """;
 
         mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
                         .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content(body))
@@ -447,6 +462,7 @@ class ApiControllerTest {
                 """;
 
         mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
                         .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content(body))
@@ -476,6 +492,7 @@ class ApiControllerTest {
         String token = extractJsonString(sessionResult, "token");
 
         MvcResult planResult = mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
                         .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content("{\"message\":\"想在附近玩玩\"}"))
@@ -485,6 +502,8 @@ class ApiControllerTest {
         String planId = extractPlanId(planResult);
 
         mockMvc.perform(post("/api/plans/{id}/feedback", planId)
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content("{\"message\":\"预算太高了\"}"))
                 .andExpect(status().isOk())
@@ -492,6 +511,8 @@ class ApiControllerTest {
                 .andExpect(jsonPath("$.clarification.fields").isArray());
 
         mockMvc.perform(post("/api/plans/{id}/confirm", planId)
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content("{\"rank\":1}"))
                 .andExpect(status().isConflict())
@@ -522,6 +543,7 @@ class ApiControllerTest {
 
         String familyPlanMessage = "今天下午2点在大连星海广场附近，两个大人一个孩子，预算600元，想安排亲子活动和晚餐，时间4小时左右";
         MvcResult planResult = mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
                         .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content("{\"message\":\"" + familyPlanMessage + "\"}"))
@@ -540,6 +562,8 @@ class ApiControllerTest {
                 .andExpect(jsonPath("$.options[0].rank").exists());
 
         mockMvc.perform(post("/api/plans/{id}/confirm", planId)
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content("{\"rank\":1}"))
                 .andExpect(status().isOk())
@@ -548,6 +572,8 @@ class ApiControllerTest {
                 .andExpect(jsonPath("$.execution.shareMessage").exists());
 
         mockMvc.perform(post("/api/plans/{id}/confirm", planId)
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content("{\"rank\":99}"))
                 .andExpect(status().isBadRequest())
@@ -556,11 +582,100 @@ class ApiControllerTest {
 
         String feedbackMessage = "\u4e0d\u8981\u592a\u8fdc\uff0c\u665a\u996d\u6362\u6e05\u6de1\u4e00\u70b9";
         mockMvc.perform(post("/api/plans/{id}/feedback", planId)
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", token)
                         .contentType("application/json")
                         .content("{\"message\":\"" + feedbackMessage + "\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.planId").exists())
                 .andExpect(jsonPath("$.options[0].timeline").isArray());
+    }
+
+    @Test
+    void storesMessageLevelHistoryAndSupportsRenameDelete() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+        when(mimoClient.complete(anyString(), anyString())).thenThrow(new IllegalStateException("fast fallback"));
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = extractJsonString(sessionResult, "token");
+
+        String firstMessage = "今天晚上 7 点在上海静安寺附近，4 个朋友，预算 800 元，想先找一个有意思的地方再吃饭，路线不要太折腾。";
+        MvcResult firstPlan = mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "message", firstMessage,
+                                "planCount", 3,
+                                "stopCountPreference", "标准"
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.threadId").exists())
+                .andExpect(jsonPath("$.assistantMessageId").exists())
+                .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
+                .andReturn();
+
+        String threadId = extractJsonString(firstPlan, "threadId");
+        String previousPlanId = extractPlanId(firstPlan);
+
+        mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "message", "3小时左右",
+                                "threadId", threadId,
+                                "previousPlanId", previousPlanId,
+                                "planCount", 3,
+                                "stopCountPreference", "标准",
+                                "clarificationAnswers", Map.of("duration", "3小时左右")
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.threadId").value(threadId))
+                .andExpect(jsonPath("$.status").value("READY"));
+
+        mockMvc.perform(get("/api/history/threads")
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].threadId").value(threadId))
+                .andExpect(jsonPath("$[0].lastStatus").value("READY"));
+
+        mockMvc.perform(get("/api/history/threads/{id}", threadId)
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.messages.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(4)))
+                .andExpect(jsonPath("$.messages[0].kind").value("USER_TEXT"))
+                .andExpect(jsonPath("$.messages[1].kind").value("ASSISTANT_CLARIFICATION"))
+                .andExpect(jsonPath("$.messages[1].payload.currentStep").value("clarify"))
+                .andExpect(jsonPath("$.messages[3].kind").value("ASSISTANT_PLAN_RESULT"))
+                .andExpect(jsonPath("$.messages[3].payload.currentStep").value("plans"));
+
+        mockMvc.perform(patch("/api/history/threads/{id}", threadId)
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content("{\"title\":\"新的线程标题\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.title").value("新的线程标题"));
+
+        mockMvc.perform(delete("/api/history/threads/{id}", threadId)
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ok").value(true));
+
+        mockMvc.perform(get("/api/history/threads")
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.threadId=='" + threadId + "')]").isEmpty());
     }
 
     private String extractPlanId(MvcResult result) throws Exception {
