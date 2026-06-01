@@ -1,7 +1,7 @@
 :root {
-  font-family: Inter, "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
-  color: #1d2436;
-  background: #eef3ff;
+  font-family: "Trebuchet MS", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  color: #563321;
+  background: #fff7ec;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -12,12 +12,13 @@
 
 html {
   min-width: 320px;
-  background: #eef3ff;
+  background: #fff7ec;
 }
 
 body {
   min-width: 320px;
   margin: 0;
+  background: #fff7ec;
 }
 
 #app {
