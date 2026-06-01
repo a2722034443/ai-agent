@@ -133,8 +133,14 @@ public class ExternalClientProperties {
     public static class Asr {
         private boolean enabled = true;
         private String provider = "mock";
+        private String mockProvider = "mock";
+        private String aliyunProvider = "aliyun";
         private String baseUrl = "https://nls-gateway-cn-shanghai.aliyuncs.com";
         private String tokenUrl = "https://nls-meta.cn-shanghai.aliyuncs.com";
+        private String tokenAction = "CreateToken";
+        private String tokenVersion = "2019-02-28";
+        private String tokenTimestampPattern = "yyyy-MM-dd'T'HH:mm:ss'Z'";
+        private String successStatus = "20000000";
         private String accessKeyId = "";
         private String accessKeySecret = "";
         private String appKey = "";
@@ -148,10 +154,22 @@ public class ExternalClientProperties {
         public void setEnabled(boolean enabled) { this.enabled = enabled; }
         public String getProvider() { return provider; }
         public void setProvider(String provider) { this.provider = provider; }
+        public String getMockProvider() { return mockProvider; }
+        public void setMockProvider(String mockProvider) { this.mockProvider = mockProvider; }
+        public String getAliyunProvider() { return aliyunProvider; }
+        public void setAliyunProvider(String aliyunProvider) { this.aliyunProvider = aliyunProvider; }
         public String getBaseUrl() { return baseUrl; }
         public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
         public String getTokenUrl() { return tokenUrl; }
         public void setTokenUrl(String tokenUrl) { this.tokenUrl = tokenUrl; }
+        public String getTokenAction() { return tokenAction; }
+        public void setTokenAction(String tokenAction) { this.tokenAction = tokenAction; }
+        public String getTokenVersion() { return tokenVersion; }
+        public void setTokenVersion(String tokenVersion) { this.tokenVersion = tokenVersion; }
+        public String getTokenTimestampPattern() { return tokenTimestampPattern; }
+        public void setTokenTimestampPattern(String tokenTimestampPattern) { this.tokenTimestampPattern = tokenTimestampPattern; }
+        public String getSuccessStatus() { return successStatus; }
+        public void setSuccessStatus(String successStatus) { this.successStatus = successStatus; }
         public String getAccessKeyId() { return accessKeyId; }
         public void setAccessKeyId(String accessKeyId) { this.accessKeyId = accessKeyId; }
         public String getAccessKeySecret() { return accessKeySecret; }

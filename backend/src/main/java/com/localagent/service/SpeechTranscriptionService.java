@@ -27,11 +27,6 @@ import org.springframework.web.multipart.MultipartFile;
 
 @Service
 public class SpeechTranscriptionService {
-    private static final DateTimeFormatter ISO_8601 =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'").withZone(ZoneOffset.UTC);
-    private static final String ALIYUN_TOKEN_ACTION = "CreateToken";
-    private static final String ALIYUN_TOKEN_VERSION = "2019-02-28";
-
     private final ExternalClientProperties properties;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
@@ -49,24 +44,28 @@ public class SpeechTranscriptionService {
         String traceId = "speech_" + UUID.randomUUID();
         ExternalClientProperties.Asr asr = properties.getAsr();
         validate(file, asr);
-        if (!asr.isEnabled() || "mock".equalsIgnoreCase(asr.getProvider())) {
+        if (!asr.isEnabled() || asr.getMockProvider().equalsIgnoreCase(asr.getProvider())) {
             return new SpeechTranscribeResponse("今天晚上七点在上海静安寺附近，四个朋友，预算八百，想先玩再吃饭",
-                    "zh", elapsed(start), "mock", traceId);
+                    "zh", elapsed(start), asr.getMockProvider(), traceId);
         }
-        if (!"aliyun".equalsIgnoreCase(asr.getProvider())) {
+        if (!asr.getAliyunProvider().equalsIgnoreCase(asr.getProvider())) {
             throw new IllegalArgumentException("Unsupported ASR provider: " + asr.getProvider());
         }
-        if (isBlank(asr.getAccessKeyId()) || isBlank(asr.getAccessKeySecret()) || isBlank(asr.getAppKey())) {
-            throw new IllegalArgumentException("Aliyun ASR credentials are incomplete");
-        }
+        validateAliyunConfig(asr);
         try {
             String token = createAliyunToken(asr);
             String text = transcribeWithAliyun(file, asr, token);
-            return new SpeechTranscribeResponse(text, "zh", elapsed(start), "aliyun", traceId);
+            return new SpeechTranscribeResponse(text, "zh", elapsed(start), asr.getAliyunProvider(), traceId);
         } catch (IllegalArgumentException e) {
             throw e;
         } catch (Exception e) {
             throw new SpeechTranscriptionException("语音识别失败，请重试或直接输入文字", e);
+        }
+    }
+
+    private void validateAliyunConfig(ExternalClientProperties.Asr asr) {
+        if (isBlank(asr.getAccessKeyId()) || isBlank(asr.getAccessKeySecret()) || isBlank(asr.getAppKey())) {
+            throw new IllegalArgumentException("Aliyun ASR credentials are incomplete");
         }
     }
 
@@ -91,14 +90,14 @@ public class SpeechTranscriptionService {
     private String createAliyunToken(ExternalClientProperties.Asr asr) throws Exception {
         Map<String, String> params = new LinkedHashMap<>();
         params.put("AccessKeyId", asr.getAccessKeyId());
-        params.put("Action", ALIYUN_TOKEN_ACTION);
+        params.put("Action", asr.getTokenAction());
         params.put("Format", "JSON");
         params.put("RegionId", "cn-shanghai");
         params.put("SignatureMethod", "HMAC-SHA1");
         params.put("SignatureNonce", UUID.randomUUID().toString());
         params.put("SignatureVersion", "1.0");
-        params.put("Timestamp", ISO_8601.format(Instant.now()));
-        params.put("Version", ALIYUN_TOKEN_VERSION);
+        params.put("Timestamp", timestampFormatter(asr).format(Instant.now()));
+        params.put("Version", asr.getTokenVersion());
 
         String canonical = canonicalizedQuery(params);
         String stringToSign = "GET&%2F&" + percentEncode(canonical);
@@ -110,7 +109,8 @@ public class SpeechTranscriptionService {
                 .timeout(Duration.ofMillis(asr.getTimeoutMs()))
                 .GET()
                 .build();
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        HttpResponse<String> response = httpClient.send(request,
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         Map<String, Object> body = objectMapper.readValue(response.body(), new TypeReference<>() {});
         if (response.statusCode() >= 400 || body.containsKey("Code")) {
             throw new IllegalStateException("Aliyun token request failed: " + body);
@@ -123,7 +123,8 @@ public class SpeechTranscriptionService {
         return id;
     }
 
-    private String transcribeWithAliyun(MultipartFile file, ExternalClientProperties.Asr asr, String token) throws Exception {
+    private String transcribeWithAliyun(MultipartFile file, ExternalClientProperties.Asr asr,
+                                        String token) throws Exception {
         String url = trimTrailingSlash(asr.getBaseUrl())
                 + "/stream/v1/asr?appkey=" + percentEncode(asr.getAppKey())
                 + "&format=" + percentEncode(asr.getFormat())
@@ -136,10 +137,11 @@ public class SpeechTranscriptionService {
                 .header("Content-Type", "application/octet-stream")
                 .POST(HttpRequest.BodyPublishers.ofByteArray(file.getBytes()))
                 .build();
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        HttpResponse<String> response = httpClient.send(request,
+                HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
         Map<String, Object> body = objectMapper.readValue(response.body(), new TypeReference<>() {});
         String status = String.valueOf(body.getOrDefault("status", ""));
-        if (response.statusCode() >= 400 || !"20000000".equals(status)) {
+        if (response.statusCode() >= 400 || !asr.getSuccessStatus().equals(status)) {
             throw new IllegalStateException("Aliyun ASR request failed: " + body);
         }
         String result = String.valueOf(body.getOrDefault("result", "")).trim();
@@ -157,6 +159,10 @@ public class SpeechTranscriptionService {
                 .orElse("");
     }
 
+    private DateTimeFormatter timestampFormatter(ExternalClientProperties.Asr asr) {
+        return DateTimeFormatter.ofPattern(asr.getTokenTimestampPattern()).withZone(ZoneOffset.UTC);
+    }
+
     private String hmacSha1(String text, String secret) throws Exception {
         Mac mac = Mac.getInstance("HmacSHA1");
         mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA1"));
@@ -171,7 +177,9 @@ public class SpeechTranscriptionService {
     }
 
     private String trimTrailingSlash(String value) {
-        if (value == null || value.isBlank()) return "";
+        if (value == null || value.isBlank()) {
+            return "";
+        }
         return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
     }
 

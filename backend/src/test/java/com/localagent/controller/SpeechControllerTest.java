@@ -47,13 +47,6 @@ class SpeechControllerTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.hasKey(anyString())).thenReturn(true);
 
-        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
-                        .contentType("application/json")
-                        .content("{\"nickname\":\"voice\"}"))
-                .andExpect(status().isOk())
-                .andReturn();
-        String token = objectMapper.readTree(sessionResult.getResponse().getContentAsString()).get("token").asText();
-
         MockMultipartFile file = new MockMultipartFile(
                 "file",
                 "voice.wav",
@@ -63,7 +56,7 @@ class SpeechControllerTest {
 
         mockMvc.perform(multipart("/api/speech/transcribe")
                         .file(file)
-                        .header("X-Session-Token", token))
+                        .header("X-Session-Token", createToken()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.text").isNotEmpty())
                 .andExpect(jsonPath("$.engine").value("mock"))
@@ -75,15 +68,17 @@ class SpeechControllerTest {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.hasKey(anyString())).thenReturn(true);
 
-        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+        mockMvc.perform(multipart("/api/speech/transcribe")
+                        .header("X-Session-Token", createToken()))
+                .andExpect(status().isBadRequest());
+    }
+
+    private String createToken() throws Exception {
+        MvcResult result = mockMvc.perform(post("/api/sessions")
                         .contentType("application/json")
                         .content("{\"nickname\":\"voice\"}"))
                 .andExpect(status().isOk())
                 .andReturn();
-        String token = objectMapper.readTree(sessionResult.getResponse().getContentAsString()).get("token").asText();
-
-        mockMvc.perform(multipart("/api/speech/transcribe")
-                        .header("X-Session-Token", token))
-                .andExpect(status().isBadRequest());
+        return objectMapper.readTree(result.getResponse().getContentAsString()).get("token").asText();
     }
 }
