@@ -29,6 +29,7 @@ public class AmapRouteEstimateTool {
     private static final String WALKING_PATH = "/v3/direction/walking";
     private static final String BICYCLING_PATH = "/v3/direction/bicycling";
     private static final String DRIVING_PATH = "/v3/direction/driving";
+    private static final int MAX_REQUEST_TIMEOUT_MS = 1800;
 
     private final ExternalClientProperties properties;
     private final MockTools mockTools;
@@ -140,7 +141,7 @@ public class AmapRouteEstimateTool {
             requestLimiter.awaitSlot();
             try {
                 HttpRequest request = HttpRequest.newBuilder(uri)
-                        .timeout(Duration.ofMillis(amap.getTimeoutMs()))
+                        .timeout(Duration.ofMillis(requestTimeoutMs(amap)))
                         .GET()
                         .build();
                 response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
@@ -224,6 +225,10 @@ public class AmapRouteEstimateTool {
     private boolean isQpsLimited(Map<String, Object> body) {
         return "10021".equals(String.valueOf(body.getOrDefault("infocode", "")))
                 || String.valueOf(body.getOrDefault("info", "")).contains("CUQPS");
+    }
+
+    private int requestTimeoutMs(ExternalClientProperties.Amap amap) {
+        return Math.min(amap.getTimeoutMs(), MAX_REQUEST_TIMEOUT_MS);
     }
 
     private RouteMode routeMode(Poi from, Poi to) {

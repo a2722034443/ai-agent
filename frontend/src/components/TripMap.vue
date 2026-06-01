@@ -173,6 +173,7 @@ function updateRouteLines(points, plan) {
   for (let i = 0; i < segments; i++) {
     const from = points[i]
     const to = points[i + 1]
+    if (!hasPoint(from) || !hasPoint(to)) continue
     const color = colorFor(to)
     const line = lineFor(i)
     const label = labelFor(i)
@@ -191,10 +192,24 @@ function updateRouteLines(points, plan) {
 
 function animateLine(line, path, index) {
   if (drawTimers[index]) window.clearTimeout(drawTimers[index])
-  line.setPath([path[0]])
+  if (!isValidPolylinePath(path)) {
+    line.hide?.()
+    return
+  }
+  // AMap Polyline requires at least two points; a single-point path throws.
+  line.setPath([path[0], path[0]])
   drawTimers[index] = window.setTimeout(() => {
     line.setPath(path)
   }, 80 + index * 110)
+}
+
+function isValidPolylinePath(path) {
+  return Array.isArray(path)
+    && path.length >= 2
+    && path.every(point => Array.isArray(point)
+      && point.length >= 2
+      && Number.isFinite(Number(point[0]))
+      && Number.isFinite(Number(point[1])))
 }
 
 function clearOverlays() {

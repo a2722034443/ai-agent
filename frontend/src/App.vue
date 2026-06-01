@@ -5,13 +5,36 @@
     </div>
 
     <header class="topbar glass">
-      <button class="brand" type="button" @click="activeView = 'chat'">
+      <div class="topbar-left">
+        <button
+          class="history-toggle"
+          type="button"
+          :title="sidebarOpen ? '关闭规划历史侧栏' : '打开规划历史侧栏'"
+          :aria-label="sidebarOpen ? '关闭规划历史侧栏' : '打开规划历史侧栏'"
+          @click="sidebarOpen = !sidebarOpen"
+        >
+          <svg
+            class="history-toggle-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            aria-hidden="true"
+          >
+            <rect x="3.5" y="4.5" width="17" height="15" rx="3.5" stroke="currentColor" stroke-width="1.5" />
+            <path d="M8 4.5V19.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+            <path d="M11.5 8H17" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+            <path d="M11.5 12H16.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+            <path d="M11.5 16H15.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+          </svg>
+        </button>
+        <button class="brand" type="button" @click="activeView = 'chat'">
         <span class="brand-orbit"></span>
         <span>
           <strong>立刻游</strong>
           <small>多人协同本地短时出行 AI 助理</small>
         </span>
       </button>
+      </div>
       <div class="meta">
         <span>{{ todayText }}</span>
         <button class="avatar" type="button" @click="activeView = 'profile'">
@@ -20,6 +43,18 @@
         </button>
       </div>
     </header>
+
+    <div class="app-layout">
+      <HistorySidebar
+        :threads="historyThreads"
+        :selected-thread-id="currentThreadId"
+        :open="sidebarOpen"
+        @new-thread="startNewThread"
+        @open-thread="openThread"
+        @rename-thread="renameThread"
+        @delete-thread="removeThread"
+      />
+      <button v-if="sidebarOpen" type="button" class="sidebar-mask" @click="sidebarOpen = false"></button>
 
     <section v-if="activeView === 'chat'" :class="['chat-shell', { 'result-mode': showPlanWorkspace }]">
       <div v-if="messages.length === 0" class="empty-state">
@@ -213,12 +248,30 @@
         {{ loading ? '规划中' : '规划' }}
       </button>
     </footer>
+    </div>
   </main>
 </template>
 
 <script setup>
-import { computed, nextTick, ref } from 'vue'
-import { confirmPlan, createPlan, createSession, createShare, getGuardStatus, getMemory, getSessionToken, submitCollabComment, transcribeAudio, voteShare } from './api.js'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import {
+  confirmPlan,
+  createPlan,
+  createSession,
+  createShare,
+  deleteHistoryThread,
+  getGuardStatus,
+  getHistoryThread,
+  getHistoryThreads,
+  getMemory,
+  getSessionToken,
+  renameHistoryThread,
+  submitCollabComment,
+  transcribeAudio,
+  voteShare
+} from './api.js'
+import HistorySidebar from './components/HistorySidebar.vue'
+import { clarificationSummary, restoreThreadState } from './historyState.js'
 import TripMap from './components/TripMap.vue'
 
 const token = ref(localStorage.getItem('lla_token') || '')
@@ -233,6 +286,14 @@ const recordingTimer = ref(null)
 const activeView = ref('chat')
 const currentStep = ref('need')
 const messages = ref([])
+const defaultExecutionSteps = [
+  { name: '正在买童梦亲子乐园门票', status: 'doing' },
+  { name: '正在订低卡餐厅座位', status: 'waiting' },
+  { name: '正在安排孩子小礼物配送', status: 'waiting' }
+]
+const currentThreadId = ref('')
+const historyThreads = ref([])
+const sidebarOpen = ref(false)
 const currentPlanId = ref('')
 const shownPlans = ref([])
 const activeMapRank = ref(1)
@@ -247,11 +308,7 @@ const shareId = ref('')
 const votedRank = ref(null)
 const collabComment = ref('')
 const comments = ref([{ id: 1, name: '老婆', text: '方案 1 不错，吃饭时间能不能晚半小时？' }])
-const executionSteps = ref([
-  { name: '正在买童梦亲子乐园门票', status: 'doing' },
-  { name: '正在订低卡餐厅座位', status: 'waiting' },
-  { name: '正在安排孩子小礼物配送', status: 'waiting' }
-])
+const executionSteps = ref([...defaultExecutionSteps])
 const memoryTags = ref(['老婆减肥', '孩子要亲子设施', '朋友不吃辣', '周末不跑远'])
 
 const hasFinalPlans = computed(() => shownPlans.value.length > 0)
@@ -319,6 +376,27 @@ const todayText = computed(() => {
   return `${String(now.getMonth() + 1).padStart(2, '0')}.${String(now.getDate()).padStart(2, '0')} ${week} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
 })
 
+onMounted(() => {
+  loadThreads()
+  window.addEventListener('keydown', handleWindowKeydown)
+  getMemory().then(data => {
+    if (Array.isArray(data?.tags)) memoryTags.value = data.tags
+  }).catch(() => {})
+  getGuardStatus().then(data => {
+    if (Array.isArray(data?.steps)) executionSteps.value = data.steps
+  }).catch(() => {})
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', handleWindowKeydown)
+})
+
+function handleWindowKeydown(event) {
+  if (event.key === 'Escape') {
+    sidebarOpen.value = false
+  }
+}
+
 function nowText() {
   const now = new Date()
   return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`
@@ -338,7 +416,41 @@ async function ensureSession() {
   token.value = data.token
 }
 
+async function loadThreads() {
+  try {
+    await ensureSession()
+    historyThreads.value = await getHistoryThreads()
+  } catch {
+    historyThreads.value = []
+  }
+}
+
+function resetConversation() {
+  message.value = ''
+  activeView.value = 'chat'
+  currentStep.value = 'need'
+  messages.value = []
+  currentThreadId.value = ''
+  currentPlanId.value = ''
+  shownPlans.value = []
+  activeMapRank.value = 1
+  mapOrigin.value = {}
+  clarification.value = {}
+  clarificationAnswers.value = {}
+  completedClarificationAnswers.value = {}
+  selectedClarificationPreset.value = ''
+  expandedRank.value = null
+  selectedRank.value = null
+  shareId.value = ''
+}
+
+function startNewThread() {
+  resetConversation()
+  sidebarOpen.value = false
+}
+
 function useSample(text) {
+  startNewThread()
   message.value = text
   plan()
 }
@@ -357,18 +469,13 @@ async function plan() {
   try {
     await ensureSession()
     const planningMessage = await enrichMessageWithCurrentLocation(text)
-    const data = await createPlan({ message: planningMessage, planCount: 3, stopCountPreference: '标准' })
-    currentPlanId.value = data.planId || ''
-    shownPlans.value = normalizePlans(data.options || [])
-    syncMapState(data, shownPlans.value)
-    clarification.value = data.clarification || {}
-    selectedClarificationPreset.value = ''
-    if (!shownPlans.value.length) {
-      completedClarificationAnswers.value = {}
-      currentStep.value = clarification.value?.fields?.length ? 'clarify' : 'need'
-    } else {
-      currentStep.value = 'plans'
-    }
+    const data = await createPlan({
+      message: planningMessage,
+      planCount: 3,
+      stopCountPreference: '标准',
+      ...(currentThreadId.value ? { threadId: currentThreadId.value } : {})
+    })
+    applyPlanResponse(data)
     replaceLoading(loadingId, {
       role: 'assistant',
       text: shownPlans.value.length ? '方案已生成，下面展开查看地图和路线。' : '',
@@ -376,12 +483,14 @@ async function plan() {
       time: nowText()
     })
     message.value = ''
+    await loadThreads()
   } catch (err) {
     replaceLoading(loadingId, {
       role: 'assistant',
       text: friendlyError(err),
       time: nowText()
     })
+    await loadThreads()
   } finally {
     loading.value = false
     nextTick(scrollToBottom)
@@ -389,23 +498,24 @@ async function plan() {
 }
 
 async function submitClarification() {
+  if (loading.value) return
   loading.value = true
+  const answers = await buildClarificationAnswers()
+  const summaryText = clarificationSummary(answers, clarification.value?.fields || [])
+  messages.value.push({ id: crypto.randomUUID(), role: 'user', text: summaryText, time: nowText() })
   const loadingId = crypto.randomUUID()
   messages.value.push({ id: loadingId, role: 'assistant', loading: true, time: nowText() })
   try {
     await ensureSession()
-    const answers = await buildClarificationAnswers()
     const data = await createPlan({
-      message: messages.value.findLast(item => item.role === 'user')?.text || message.value,
+      message: summaryText,
       planCount: 3,
       stopCountPreference: '标准',
       clarificationAnswers: answers,
-      previousPlanId: currentPlanId.value || null
+      previousPlanId: currentPlanId.value || null,
+      threadId: currentThreadId.value || null
     })
-    currentPlanId.value = data.planId || ''
-    shownPlans.value = normalizePlans(data.options || [])
-    syncMapState(data, shownPlans.value)
-    clarification.value = shownPlans.value.length ? {} : (data.clarification || {})
+    applyPlanResponse(data)
     const hasMoreClarification = !!clarification.value?.fields?.length
     if (shownPlans.value.length) {
       completedClarificationAnswers.value = answers
@@ -426,11 +536,76 @@ async function submitClarification() {
       clarification: clarification.value,
       time: nowText()
     })
+    await loadThreads()
   } catch (err) {
     replaceLoading(loadingId, { role: 'assistant', text: friendlyError(err), time: nowText() })
+    await loadThreads()
   } finally {
     loading.value = false
+    nextTick(scrollToBottom)
   }
+}
+
+function applyPlanResponse(data) {
+  currentThreadId.value = data.threadId || currentThreadId.value
+  currentPlanId.value = data.planId || ''
+  shownPlans.value = normalizePlans(data.options || [])
+  syncMapState(data, shownPlans.value)
+  clarification.value = shownPlans.value.length ? {} : (data.clarification || {})
+  selectedClarificationPreset.value = ''
+  if (!shownPlans.value.length) {
+    completedClarificationAnswers.value = {}
+    currentStep.value = clarification.value?.fields?.length ? 'clarify' : 'need'
+  } else {
+    currentStep.value = 'plans'
+  }
+}
+
+async function openThread(threadId) {
+  try {
+    await ensureSession()
+    const detail = await getHistoryThread(threadId)
+    const restored = restoreThreadState(detail, normalizePlans)
+    currentThreadId.value = threadId
+    currentPlanId.value = restored.currentPlanId
+    shownPlans.value = restored.shownPlans
+    clarification.value = restored.clarification
+    currentStep.value = restored.currentStep
+    activeView.value = restored.activeView
+    mapOrigin.value = restored.mapOrigin
+    messages.value = restored.messages
+    executionSteps.value = restored.executionSteps.length ? restored.executionSteps : [...defaultExecutionSteps]
+    clarificationAnswers.value = {}
+    completedClarificationAnswers.value = {}
+    selectedClarificationPreset.value = ''
+    expandedRank.value = null
+    selectedRank.value = null
+    activeMapRank.value = restored.shownPlans[0]?.rank || 1
+    sidebarOpen.value = false
+    nextTick(scrollToBottom)
+  } catch {
+    startNewThread()
+  }
+}
+
+async function renameThread(thread) {
+  try {
+    await ensureSession()
+    await renameHistoryThread(thread.threadId, thread.title)
+    await loadThreads()
+  } catch {}
+}
+
+async function removeThread(thread) {
+  if (!window.confirm(`确认删除“${thread.title}”吗？`)) return
+  try {
+    await ensureSession()
+    await deleteHistoryThread(thread.threadId)
+    if (currentThreadId.value === thread.threadId) {
+      startNewThread()
+    }
+    await loadThreads()
+  } catch {}
 }
 
 function orderedClarificationFields(fields = []) {
@@ -684,12 +859,9 @@ async function selectPlan(rank) {
   selectedRank.value = rank
   if (currentPlanId.value) {
     try {
-      await confirmPlan(currentPlanId.value, rank)
-      executionSteps.value = [
-        { name: '乐园门票已锁定', status: 'done' },
-        { name: '低卡餐厅剩余 4 座，已预约', status: 'done' },
-        { name: '孩子小礼物已安排配送到乐园', status: 'done' }
-      ]
+      const data = await confirmPlan(currentPlanId.value, rank)
+      executionSteps.value = buildExecutionSteps(data.execution)
+      await loadThreads()
     } catch {
       executionSteps.value = [
         { name: '餐厅满位，已为你更换同评分低卡餐厅', status: 'done' },
@@ -854,6 +1026,20 @@ function copyShareMessage() {
   navigator.clipboard?.writeText(text)
 }
 
+function buildExecutionSteps(execution = {}) {
+  const steps = []
+  for (const order of execution.orders || []) {
+    steps.push({ name: order.targetName || '执行事项', status: 'done' })
+  }
+  if (execution.gift?.targetName) {
+    steps.push({ name: execution.gift.targetName, status: 'done' })
+  }
+  if (execution.shareMessage) {
+    steps.push({ name: '分享消息已生成', status: 'done' })
+  }
+  return steps.length ? steps : [...defaultExecutionSteps]
+}
+
 function scrollToBottom() {
   document.querySelector('.message-list')?.scrollTo({ top: 99999, behavior: 'smooth' })
 }
@@ -862,18 +1048,16 @@ function friendlyError(err) {
   if (err?.status === 422) return '抱歉，暂时没有找到完全符合的方案，要不要扩大到 5km 内，或者放宽一点需求？'
   return '抱歉，刚刚网络有点小问题，要不要再试一次？'
 }
-
-getMemory().then(data => {
-  if (Array.isArray(data?.tags)) memoryTags.value = data.tags
-}).catch(() => {})
-
-getGuardStatus().then(data => {
-  if (Array.isArray(data?.steps)) executionSteps.value = data.steps
-}).catch(() => {})
 </script>
 
 <style scoped>
 .chat-app {
+  --topbar-h: 3.5rem;
+  --panel-gap: 1rem;
+  --content-max: min(62.5rem, calc(100vw - 3rem));
+  --sidebar-w: clamp(20rem, 28vw, 23rem);
+  --history-card-min-h: 8rem;
+  --control-size: clamp(2.5rem, 4vw, 2.75rem);
   min-height: 100vh;
   min-height: 100svh;
   position: relative;
@@ -883,8 +1067,8 @@ getGuardStatus().then(data => {
     radial-gradient(circle at 18% 24%, rgba(255, 125, 0, .14), transparent 22%),
     radial-gradient(circle at 78% 18%, rgba(22, 93, 255, .14), transparent 24%),
     linear-gradient(135deg, #f8fbff 0%, #eef5ff 52%, #fff8f0 100%);
-  padding: 80px 24px 104px;
-  font-size: 16px;
+  padding: calc(var(--topbar-h) + 1.5rem) 1.5rem 6.5rem;
+  font-size: 1rem;
 }
 
 .chat-app:has(.result-mode) {
@@ -939,11 +1123,52 @@ input {
   position: fixed;
   z-index: 20;
   inset: 0 0 auto;
-  height: 56px;
+  height: var(--topbar-h);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 max(24px, calc((100vw - 800px) / 2));
+  padding: 0 max(1.5rem, calc((100vw - 50rem) / 2));
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: .625rem;
+}
+
+.history-toggle {
+  width: var(--control-size);
+  height: var(--control-size);
+  border-radius: 1rem;
+  padding: 0;
+  background: rgba(255,255,255,.92);
+  color: #334155;
+  display: inline-grid;
+  place-items: center;
+  box-shadow: 0 .625rem 1.5rem rgba(91, 106, 150, .12);
+  transition: background-color .18s ease, color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+
+.history-toggle:hover,
+.history-toggle:focus-visible {
+  background: rgba(255,255,255,.98);
+  color: #165dff;
+  box-shadow: 0 .875rem 1.75rem rgba(22, 93, 255, .14);
+}
+
+.history-toggle:focus-visible {
+  outline: 2px solid rgba(22, 93, 255, .22);
+  outline-offset: 2px;
+}
+
+.history-toggle-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  transition: transform .18s ease;
+}
+
+.history-toggle[aria-label='关闭规划历史侧栏'] .history-toggle-icon {
+  transform: scaleX(-1);
 }
 
 .brand {
@@ -1013,11 +1238,26 @@ input {
   height: 9px;
 }
 
+.app-layout {
+  position: relative;
+  z-index: 2;
+  width: var(--content-max);
+  margin: 0 auto;
+}
+
+.sidebar-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 23;
+  border: 0;
+  background: rgba(15, 23, 42, .16);
+}
+
 .chat-shell,
 .page-panel {
   position: relative;
   z-index: 2;
-  width: min(800px, 100%);
+  width: 100%;
   margin: 0 auto;
 }
 
@@ -1043,14 +1283,14 @@ input {
 
 .empty-state h1 {
   margin: 0;
-  font-size: 18px;
+  font-size: 1.125rem;
 }
 
 .empty-state p {
   max-width: 520px;
   margin: 0;
   color: #64748b;
-  font-size: 16px;
+  font-size: 1rem;
   line-height: 1.7;
 }
 
@@ -1067,7 +1307,7 @@ input {
 .comment-box button,
 .pick-button {
   min-height: 48px;
-  border-radius: 8px;
+  border-radius: .5rem;
   background: #eef3f8;
   color: #334155;
   font-weight: 700;
@@ -1088,7 +1328,7 @@ input {
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 12px;
   align-items: stretch;
-  margin-bottom: 16px;
+  margin-bottom: 1rem;
   animation: result-rise .32s ease both;
 }
 
@@ -1107,8 +1347,8 @@ input {
   grid-template-rows: auto auto;
   gap: 4px 10px;
   align-items: center;
-  border-radius: 12px;
-  padding: 12px;
+  border-radius: .75rem;
+  padding: .75rem;
   background: rgba(255,255,255,.82);
   color: #1d2436;
   text-align: left;
@@ -1137,20 +1377,23 @@ input {
 
 .step-card strong {
   min-width: 0;
+  font-size: .9375rem;
+  line-height: 1.3;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  font-size: 15px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .step-card small {
   min-width: 0;
-  overflow: hidden;
   color: #64748b;
-  font-size: 13px;
+  font-size: .8125rem;
   line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .step-card.done span {
@@ -1175,7 +1418,7 @@ input {
 .summary-share {
   min-width: 128px;
   min-height: 76px;
-  border-radius: 12px;
+  border-radius: .75rem;
   padding: 0 18px;
   background: #165dff;
   color: #fff;
@@ -1192,14 +1435,14 @@ input {
 
 .result-workspace {
   display: grid;
-  grid-template-columns: 380px minmax(0, 580px);
-  gap: 24px;
+  grid-template-columns: minmax(22rem, clamp(24rem, 36vw, 28rem)) minmax(0, 1fr);
+  gap: 1.5rem;
   align-items: start;
   animation: result-rise .42s cubic-bezier(.2, .86, .28, 1) both;
 }
 
 .result-plans {
-  max-height: 580px;
+  max-height: min(36.25rem, calc(100svh - 14rem));
   overflow: auto;
   overscroll-behavior: contain;
   padding-right: 4px;
@@ -1229,9 +1472,12 @@ input {
 .result-plans .timeline-line {
   font-size: 17px !important;
   line-height: 1.55;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-overflow: unset;
 }
 
 .result-plans .plan-meta {
@@ -1261,7 +1507,7 @@ input {
 }
 
 .result-map :deep(.map-body) {
-  height: 580px;
+  height: min(36.25rem, calc(100svh - 14rem));
 }
 
 .message-row {
@@ -1282,8 +1528,8 @@ input {
 
 .bubble {
   max-width: min(720px, calc(100% - 42px));
-  border-radius: 8px;
-  padding: 16px;
+  border-radius: .5rem;
+  padding: 1rem;
   background: rgba(255,255,255,.92);
   box-shadow: 0 10px 22px rgba(91, 106, 150, .10);
 }
@@ -1363,16 +1609,22 @@ input {
   background: #16a34a;
   color: #fff;
   font-size: 14px;
-  white-space: nowrap;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.25;
+  max-width: 7.5rem;
 }
 
 .timeline-line {
   margin: 12px 0 !important;
   color: #334155;
   font-size: 16px !important;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  text-overflow: unset;
 }
 
 .plan-meta {
@@ -1555,8 +1807,8 @@ input {
 
 .page-panel {
   margin-top: 24px;
-  border-radius: 16px;
-  padding: 18px;
+  border-radius: 1rem;
+  padding: 1.125rem;
   background: rgba(255,255,255,.72);
   box-shadow: 0 16px 36px rgba(91, 106, 150, .12);
 }
@@ -1666,11 +1918,11 @@ input {
   z-index: 20;
   left: 50%;
   bottom: 14px;
-  width: min(800px, calc(100vw - 48px));
+  width: min(50rem, calc(100vw - 3rem));
   min-height: 72px;
   transform: translateX(-50%);
-  border-radius: 16px;
-  padding: 12px;
+  border-radius: 1rem;
+  padding: .75rem;
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr) 48px 48px 72px;
   align-items: center;
@@ -1712,27 +1964,59 @@ input {
   }
 }
 
-@media (max-width: 760px) {
+@media (min-width: 768px) and (max-width: 1023px) {
   .chat-app {
-    padding: 64px 12px 114px;
-    font-size: 15px;
-  }
-
-  .chat-app:has(.result-mode) {
-    padding-bottom: 24px;
+    --content-max: min(100%, calc(100vw - 2rem));
+    --sidebar-w: min(22rem, calc(100vw - 2rem));
+    --history-card-min-h: 7.5rem;
   }
 
   .topbar {
-    padding: 0 16px;
+    padding: 0 1rem;
+  }
+
+  .result-workspace {
+    grid-template-columns: 1fr;
+  }
+
+  .result-map :deep(.map-body) {
+    height: min(28rem, calc(100svh - 18rem));
+  }
+}
+
+@media (max-width: 767px) {
+  .chat-app {
+    --content-max: 100%;
+    --sidebar-w: min(calc(100vw - 1.5rem), 21rem);
+    --history-card-min-h: 7rem;
+    --control-size: 2.5rem;
+    padding: calc(var(--topbar-h) + .5rem) .75rem 7.125rem;
+    font-size: .9375rem;
+  }
+
+  .chat-app:has(.result-mode) {
+    padding-bottom: 1.5rem;
+  }
+
+  .topbar {
+    padding: 0 1rem;
+  }
+
+  .app-layout {
+    width: 100%;
+  }
+
+  .sidebar-mask {
+    background: rgba(15, 23, 42, .24);
   }
 
   .chat-shell,
   .page-panel {
-    width: min(640px, 100%);
+    width: 100%;
   }
 
   .chat-shell.result-mode {
-    width: min(640px, 100%);
+    width: 100%;
   }
 
   .meta span {
@@ -1749,6 +2033,11 @@ input {
 
   .result-workspace {
     grid-template-columns: 1fr;
+  }
+
+  .result-plans .timeline-line,
+  .timeline-line {
+    -webkit-line-clamp: 3;
   }
 
   .step-summary {
@@ -1778,7 +2067,7 @@ input {
   }
 
   .result-map :deep(.map-body) {
-    height: 300px;
+    height: min(18.75rem, calc(100svh - 22rem));
   }
 
   .bubble {
@@ -1800,7 +2089,7 @@ input {
   }
 
   .composer {
-    width: min(640px, calc(100vw - 24px));
+    width: min(100%, calc(100vw - 1.5rem));
     grid-template-columns: 24px minmax(0, 1fr) 44px 44px 60px;
     grid-auto-rows: auto;
   }
