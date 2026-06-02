@@ -1,7 +1,10 @@
 <template>
-  <aside ref="rootRef" :class="['history-sidebar glass', { open: open }]">
+  <aside ref="rootRef" :class="['history-sidebar', { open: open }]">
     <div class="history-head">
-      <strong>规划历史</strong>
+      <div>
+        <strong>规划历史</strong>
+        <p>最近的出行对话和方案状态</p>
+      </div>
       <button
         type="button"
         class="history-new"
@@ -14,7 +17,7 @@
 
     <div v-if="!threads.length" class="history-empty">
       <strong>还没有历史</strong>
-      <p>开始一次新的出行规划后，会在这里出现。</p>
+      <p>开始一次新的出行规划后，这里会记录最近的对话和方案。</p>
     </div>
 
     <ol v-else class="history-list">
@@ -26,7 +29,10 @@
         <button type="button" class="history-item" @click="$emit('open-thread', thread.threadId)">
           <div class="history-title-row">
             <strong>{{ thread.title }}</strong>
-            <span>{{ statusText(thread.lastStatus) }}</span>
+            <span class="history-status">
+              <i aria-hidden="true"></i>
+              {{ statusText(thread.lastStatus) }}
+            </span>
           </div>
           <p>{{ thread.lastMessagePreview || '暂无消息' }}</p>
           <small>{{ formatTime(thread.lastMessageAt) }}</small>
@@ -130,8 +136,11 @@ function deleteThread(thread) {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   gap: .875rem;
-  border-radius: 1.25rem;
+  border: 1px solid rgba(114, 85, 66, .16);
+  border-radius: 1rem;
   padding: 1rem;
+  background: rgba(255, 253, 247, .96);
+  box-shadow: 0 16px 36px rgba(61, 52, 40, .12);
   overflow: hidden;
   container-type: inline-size;
   transform: translateX(calc(-100% - var(--panel-gap)));
@@ -154,37 +163,55 @@ function deleteThread(thread) {
 }
 
 .history-head strong {
-  font-size: 1.125rem;
+  display: block;
+  color: #5f4837;
+  font-size: 1.08rem;
   font-weight: 900;
 }
 
+.history-head p {
+  margin: .2rem 0 0;
+  color: #8f725e;
+  font-size: .78rem;
+  line-height: 1.35;
+}
+
 .history-new {
-  min-height: 2.125rem;
-  border-radius: .625rem;
-  padding: 0 .75rem;
-  background: #eef3f8;
-  color: #334155;
-  font-size: .8125rem;
-  font-weight: 800;
+  flex: none;
+  min-height: 2.5rem;
+  border: 1px solid rgba(114, 85, 66, .16);
+  border-radius: .875rem;
+  padding: 0 .9rem;
+  background: rgba(255, 255, 255, .72);
+  color: #725542;
+  font-size: .82rem;
+  font-weight: 900;
+  box-shadow: 0 3px 0 rgba(201, 186, 164, .38);
+}
+
+.history-new:hover,
+.history-new:focus-visible {
+  background: rgba(255, 255, 255, .9);
 }
 
 .history-empty {
-  border-radius: 1rem;
-  padding: 1.125rem 1rem;
-  background: rgba(255,255,255,.88);
-  color: #334155;
+  border: 1px solid rgba(114, 85, 66, .12);
+  border-radius: .875rem;
+  padding: 1rem;
+  background: rgba(255,255,255,.72);
+  color: #5f4837;
 }
 
 .history-empty strong {
   display: block;
-  font-size: .9375rem;
+  font-size: .96rem;
 }
 
 .history-empty p {
   margin: .5rem 0 0;
-  color: #64748b;
+  color: #8f725e;
   font-size: .8125rem;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 
 .history-list {
@@ -203,21 +230,23 @@ function deleteThread(thread) {
 .history-item {
   width: 100%;
   min-height: var(--history-card-min-h);
+  border: 1px solid rgba(114, 85, 66, .14);
   border-radius: .875rem;
-  padding: .875rem 3rem .875rem .875rem;
-  background: rgba(255,255,255,.92);
+  padding: .875rem 2.85rem .875rem .875rem;
+  background: rgba(255, 255, 255, .76);
   text-align: left;
-  box-shadow: 0 10px 24px rgba(91, 106, 150, .10);
-  border: 1px solid rgba(226, 232, 240, .78);
-  transition: border-color .18s ease, box-shadow .18s ease;
+  box-shadow: 0 8px 18px rgba(61, 52, 40, .06);
+  transition: transform .18s ease, box-shadow .18s ease, background-color .18s ease, border-color .18s ease;
   display: grid;
   align-content: start;
-  gap: .5rem;
+  gap: .45rem;
 }
 
 .history-row.active .history-item {
-  border-color: rgba(22, 93, 255, .36);
-  box-shadow: 0 14px 30px rgba(22, 93, 255, .14);
+  border-color: #bdaea0;
+  background: linear-gradient(180deg, #fffef8 0%, #f7ead4 100%);
+  box-shadow: 0 10px 20px rgba(61, 52, 40, .08);
+  transform: translateY(-1px);
 }
 
 .history-title-row {
@@ -234,30 +263,38 @@ function deleteThread(thread) {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  font-size: .9375rem;
+  font-size: .98rem;
   line-height: 1.35;
   font-weight: 900;
 }
 
 .history-title-row span {
   flex: none;
-  border-radius: 999px;
-  padding: .1875rem .5rem;
-  background: rgba(22, 93, 255, .10);
-  color: #165dff;
-  font-size: .6875rem;
+  display: inline-flex;
+  align-items: center;
+  gap: .28rem;
+  color: #725542;
+  font-size: .72rem;
   line-height: 1.2;
-  font-weight: 900;
+  font-weight: 800;
   max-width: min(5.25rem, 28%);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.history-status i {
+  width: .45rem;
+  height: .45rem;
+  border-radius: 999px;
+  background: #95cf88;
+  box-shadow: 0 0 0 3px rgba(149, 207, 136, .16);
+}
+
 .history-item p {
-  color: #334155;
+  color: #806450;
   font-size: .8125rem;
-  line-height: 1.45;
+  line-height: 1.55;
   display: -webkit-box;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
@@ -267,23 +304,25 @@ function deleteThread(thread) {
 .history-item small {
   display: block;
   margin-top: .125rem;
-  color: #94a3b8;
+  color: #9d7b68;
   font-size: .75rem;
+  font-weight: 700;
 }
 
 .history-more {
   position: absolute;
-  top: .625rem;
-  right: .625rem;
-  width: 1.875rem;
-  height: 1.875rem;
-  border-radius: .625rem;
+  top: .75rem;
+  right: .75rem;
+  width: 2rem;
+  height: 2rem;
+  border-radius: .7rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: .1875rem;
-  background: rgba(238, 243, 248, .92);
-  opacity: .12;
+  border: 1px solid rgba(114, 85, 66, .14);
+  background: rgba(255,255,255,.88);
+  opacity: .2;
   transition: opacity .16s ease, background-color .16s ease;
 }
 
@@ -298,37 +337,38 @@ function deleteThread(thread) {
   width: .1875rem;
   height: .1875rem;
   border-radius: 999px;
-  background: #5b6476;
+  background: #725542;
 }
 
 .history-menu {
   position: absolute;
-  top: 2.625rem;
-  right: .625rem;
+  top: 2.8rem;
+  right: .75rem;
   min-width: 7.25rem;
   display: grid;
   gap: .25rem;
-  border-radius: .75rem;
+  border-radius: .875rem;
   padding: .375rem;
-  background: rgba(255,255,255,.96);
-  box-shadow: 0 18px 34px rgba(15, 23, 42, .16);
-  border: 1px solid rgba(226, 232, 240, .92);
+  border: 1px solid rgba(114, 85, 66, .16);
+  background: rgba(255,253,247,.98);
+  box-shadow: 0 18px 28px rgba(61, 52, 40, .14);
 }
 
 .history-menu button {
   min-height: 2rem;
-  border-radius: .5rem;
+  border: 0;
+  border-radius: .65rem;
   padding: 0 .625rem;
   background: transparent;
-  color: #334155;
+  color: #725542;
   text-align: left;
   font-size: .8125rem;
-  font-weight: 700;
+  font-weight: 800;
 }
 
 .history-menu button:hover,
 .history-menu button:focus-visible {
-  background: #eef3f8;
+  background: #f7ead4;
 }
 
 .history-menu .danger {

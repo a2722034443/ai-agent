@@ -1,7 +1,8 @@
 :root {
-  font-family: Inter, "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
-  color: #1d2436;
-  background: #eef3ff;
+  --app-font-family: Nunito, "Noto Sans SC", "Zen Maru Gothic", "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei", sans-serif;
+  font-family: var(--app-font-family);
+  color: #563321;
+  background: #fff7ec;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -12,14 +13,17 @@
 
 html {
   min-width: 320px;
-  background: #eef3ff;
+  background: #fff7ec;
 }
 
 body {
   min-width: 320px;
   margin: 0;
+  background: #fff7ec;
+  font-family: var(--app-font-family);
 }
 
 #app {
   min-height: 100vh;
+  font-family: var(--app-font-family);
 }
