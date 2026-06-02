@@ -235,12 +235,18 @@
           @keydown.enter="plan"
         />
       </label>
-      <button type="button" :class="{ active: voiceRecording }" @click="toggleVoice">语音</button>
-      <button type="button" @click="openImageTool">图片</button>
+      <button
+        type="button"
+        :class="{ active: voiceRecording || voiceTranscribing }"
+        :disabled="voiceTranscribing && !voiceRecording"
+        :title="voiceHint"
+        @click="toggleVoice"
+      >
+        {{ voiceButtonText }}
+      </button>
       <button class="primary-button" type="button" :disabled="!message.trim() || loading" @click="plan">
         {{ loading ? '规划中' : '规划' }}
       </button>
-      <input ref="fileInput" class="hidden-file" type="file" accept="image/*" @change="handleImagePick" />
     </footer>
     </div>
   </main>
@@ -260,7 +266,9 @@ import {
   getMemory,
   getSessionToken,
   renameHistoryThread,
+  speechStreamUrl,
   submitCollabComment,
+  transcribeAudio,
   voteShare
 } from './api.js'
 import HistorySidebar from './components/HistorySidebar.vue'
@@ -271,7 +279,16 @@ const token = ref(localStorage.getItem('lla_token') || '')
 const message = ref('')
 const loading = ref(false)
 const voiceRecording = ref(false)
-const fileInput = ref(null)
+const voiceTranscribing = ref(false)
+const voiceError = ref('')
+const mediaStream = ref(null)
+const audioContextRef = ref(null)
+const audioProcessor = ref(null)
+const speechSocket = ref(null)
+const voiceBaseText = ref('')
+const voiceCommittedText = ref('')
+const voiceInterimText = ref('')
+const recordingTimer = ref(null)
 const activeView = ref('chat')
 const currentStep = ref('need')
 const messages = ref([])
@@ -303,6 +320,11 @@ const memoryTags = ref(['老婆减肥', '孩子要亲子设施', '朋友不吃�
 const hasFinalPlans = computed(() => shownPlans.value.length > 0)
 const showPlanWorkspace = computed(() => activeView.value === 'chat' && hasFinalPlans.value && currentStep.value === 'plans')
 const showComposer = computed(() => activeView.value !== 'chat' || currentStep.value !== 'plans' || !hasFinalPlans.value)
+const voiceButtonText = computed(() => {
+  if (voiceTranscribing.value) return '识别中'
+  return voiceRecording.value ? '停止' : '语音'
+})
+const voiceHint = computed(() => voiceError.value || (voiceRecording.value ? '点击停止录音' : '点击开始语音输入'))
 const stepCards = computed(() => {
   const userText = latestUserText()
   const answerSource = hasFinalPlans.value ? completedClarificationAnswers.value : clarificationAnswers.value
@@ -880,20 +902,215 @@ async function createShareLink() {
   activeView.value = 'collab'
 }
 
-function toggleVoice() {
-  voiceRecording.value = !voiceRecording.value
-  if (voiceRecording.value) message.value = '今天下午带老婆孩子出去玩，别离家太远，老婆最近在减肥。'
+async function toggleVoice() {
+  if (voiceRecording.value) {
+    stopVoiceRecording()
+    return
+  }
+  if (voiceTranscribing.value) return
+  await startVoiceRecording()
 }
 
-function openImageTool() {
-  fileInput.value?.click()
+async function startVoiceRecording() {
+  voiceError.value = ''
+  if (!navigator.mediaDevices?.getUserMedia) {
+    voiceError.value = '当前浏览器不支持录音'
+    return
+  }
+  try {
+    await ensureSession()
+    voiceBaseText.value = message.value
+    voiceCommittedText.value = ''
+    voiceInterimText.value = ''
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    mediaStream.value = stream
+    voiceRecording.value = true
+    voiceTranscribing.value = true
+    const socket = new WebSocket(speechStreamUrl())
+    socket.binaryType = 'arraybuffer'
+    socket.onmessage = event => {
+      const payload = JSON.parse(event.data)
+      if (payload.type === 'status' && payload.status === 'ready') {
+        voiceError.value = ''
+        return
+      }
+      if (payload.type === 'error') {
+        handleSpeechStreamMessage(payload)
+        return
+      }
+      handleSpeechStreamMessage(payload)
+    }
+    socket.onclose = () => {
+      voiceTranscribing.value = false
+      speechSocket.value = null
+    }
+    await new Promise((resolve, reject) => {
+      socket.onopen = resolve
+      socket.onerror = reject
+    })
+    speechSocket.value = socket
+    await startPcmStreaming(stream, socket)
+    recordingTimer.value = window.setTimeout(() => stopVoiceRecording(), 30000)
+  } catch (err) {
+    voiceError.value = err?.name === 'NotAllowedError' ? '麦克风权限被拒绝' : '无法启动录音'
+    stopVoiceRecording()
+  }
 }
 
-function handleImagePick(event) {
-  const file = event.target.files?.[0]
-  if (!file) return
-  message.value = `我上传了一张图片 ${file.name}，想按图片里的风格找附近可玩的地点。`
-  event.target.value = ''
+function stopVoiceRecording() {
+  if (recordingTimer.value) {
+    window.clearTimeout(recordingTimer.value)
+    recordingTimer.value = null
+  }
+  stopPcmStreaming()
+  if (speechSocket.value?.readyState === WebSocket.OPEN) {
+    speechSocket.value.send(JSON.stringify({ type: 'end' }))
+  } else {
+    speechSocket.value?.close()
+  }
+  mediaStream.value?.getTracks().forEach(track => track.stop())
+  mediaStream.value = null
+  voiceRecording.value = false
+}
+
+function handleSpeechStreamMessage(payload) {
+  if (payload.type === 'error') {
+    voiceError.value = payload.error || '语音识别失败'
+    return
+  }
+  if (payload.type !== 'chunk' || !payload.text) return
+  if (payload.finalChunk) {
+    voiceCommittedText.value = appendSpeechText(voiceCommittedText.value, payload.text)
+    voiceInterimText.value = ''
+  } else {
+    voiceInterimText.value = payload.text
+  }
+  message.value = voiceBaseText.value + voiceCommittedText.value + voiceInterimText.value
+  if (payload.completed) {
+    voiceTranscribing.value = false
+    speechSocket.value?.close()
+  }
+}
+
+function appendSpeechText(existing, next) {
+  if (!existing) return next
+  if (!next) return existing
+  if (next.startsWith(existing)) return next
+  return existing + next
+}
+
+async function startPcmStreaming(stream, socket) {
+  const samplesPerPacket = 1600
+  const audioContext = new AudioContext()
+  await audioContext.resume?.()
+  const source = audioContext.createMediaStreamSource(stream)
+  const processor = audioContext.createScriptProcessor(1024, 1, 1)
+  let pendingSamples = new Int16Array(0)
+  processor.onaudioprocess = event => {
+    if (socket.readyState !== WebSocket.OPEN) return
+    const input = event.inputBuffer.getChannelData(0)
+    pendingSamples = concatPcm(pendingSamples, floatTo16kPcm(input, audioContext.sampleRate))
+    while (pendingSamples.length >= samplesPerPacket) {
+      socket.send(pcmToArrayBuffer(pendingSamples.slice(0, samplesPerPacket)))
+      pendingSamples = pendingSamples.slice(samplesPerPacket)
+    }
+  }
+  source.connect(processor)
+  processor.connect(audioContext.destination)
+  audioContextRef.value = audioContext
+  audioProcessor.value = processor
+}
+
+function stopPcmStreaming() {
+  audioProcessor.value?.disconnect()
+  audioProcessor.value = null
+  audioContextRef.value?.close?.()
+  audioContextRef.value = null
+}
+
+function floatTo16kPcm(input, sourceRate) {
+  const ratio = sourceRate / 16000
+  const length = Math.floor(input.length / ratio)
+  const output = new Int16Array(length)
+  for (let i = 0; i < length; i++) {
+    const sample = Math.max(-1, Math.min(1, input[Math.floor(i * ratio)]))
+    output[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff
+  }
+  return output
+}
+
+function concatPcm(left, right) {
+  if (!left.length) return right
+  if (!right.length) return left
+  const output = new Int16Array(left.length + right.length)
+  output.set(left)
+  output.set(right, left.length)
+  return output
+}
+
+function pcmToArrayBuffer(samples) {
+  const buffer = new ArrayBuffer(samples.length * 2)
+  const view = new DataView(buffer)
+  for (let i = 0; i < samples.length; i++) {
+    view.setInt16(i * 2, samples[i], true)
+  }
+  return buffer
+}
+
+async function convertBlobToWav(blob) {
+  const audioContext = new AudioContext()
+  try {
+    const arrayBuffer = await blob.arrayBuffer()
+    const decoded = await audioContext.decodeAudioData(arrayBuffer)
+    const wavBuffer = audioBufferToWav(resampleToMono(decoded, 16000), 16000)
+    return new Blob([wavBuffer], { type: 'audio/wav' })
+  } finally {
+    audioContext.close?.()
+  }
+}
+
+function resampleToMono(buffer, targetRate) {
+  const source = buffer.getChannelData(0)
+  const ratio = buffer.sampleRate / targetRate
+  const length = Math.max(1, Math.round(source.length / ratio))
+  const output = new Float32Array(length)
+  for (let i = 0; i < length; i++) {
+    const index = Math.min(source.length - 1, Math.floor(i * ratio))
+    output[i] = source[index]
+  }
+  return output
+}
+
+function audioBufferToWav(samples, sampleRate) {
+  const bytesPerSample = 2
+  const blockAlign = bytesPerSample
+  const buffer = new ArrayBuffer(44 + samples.length * bytesPerSample)
+  const view = new DataView(buffer)
+  writeAscii(view, 0, 'RIFF')
+  view.setUint32(4, 36 + samples.length * bytesPerSample, true)
+  writeAscii(view, 8, 'WAVE')
+  writeAscii(view, 12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, 1, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * blockAlign, true)
+  view.setUint16(32, blockAlign, true)
+  view.setUint16(34, 16, true)
+  writeAscii(view, 36, 'data')
+  view.setUint32(40, samples.length * bytesPerSample, true)
+  let offset = 44
+  for (let i = 0; i < samples.length; i++, offset += 2) {
+    const sample = Math.max(-1, Math.min(1, samples[i]))
+    view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true)
+  }
+  return buffer
+}
+
+function writeAscii(view, offset, text) {
+  for (let i = 0; i < text.length; i++) {
+    view.setUint8(offset + i, text.charCodeAt(i))
+  }
 }
 
 function copyShareMessage() {
@@ -1827,8 +2044,10 @@ input {
   font-weight: 800;
 }
 
-.hidden-file {
-  display: none;
+.composer > button.active {
+  background: #fff1f2;
+  color: #be123c;
+  box-shadow: inset 0 0 0 1px rgba(225, 29, 72, .28);
 }
 
 @media (min-width: 768px) {
