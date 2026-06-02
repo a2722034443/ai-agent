@@ -79,6 +79,13 @@ external:
     timeout-ms: ${ASR_TIMEOUT_MS:15000}
     max-audio-mb: ${ASR_MAX_AUDIO_MB:10}
     max-duration-seconds: ${ASR_MAX_DURATION_SECONDS:30}
+    # Realtime ASR WebSocket controls.
+    stream:
+      enabled: ${ASR_STREAM_ENABLED:true}
+      url: ${ASR_STREAM_URL:wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1}
+      chunk-millis: ${ASR_STREAM_CHUNK_MILLIS:200}
+      chunk-chars: ${ASR_STREAM_CHUNK_CHARS:15}
+      silence-fallback-ms: ${ASR_STREAM_SILENCE_FALLBACK_MS:500}
 
 agent:
   pipeline: ${AGENT_PIPELINE_PATH:../agents/pipeline.yml}

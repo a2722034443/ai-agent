@@ -87,7 +87,7 @@ public class SpeechTranscriptionService {
         }
     }
 
-    private String createAliyunToken(ExternalClientProperties.Asr asr) throws Exception {
+    String createAliyunToken(ExternalClientProperties.Asr asr) throws Exception {
         Map<String, String> params = new LinkedHashMap<>();
         params.put("AccessKeyId", asr.getAccessKeyId());
         params.put("Action", asr.getTokenAction());

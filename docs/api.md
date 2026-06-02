@@ -248,6 +248,34 @@ Response:
 - `INVALID_AUDIO`: 文件为空、过大或格式不支持。
 - `TRANSCRIBE_FAILED`: ASR provider 调用失败或未识别到有效文本。
 
+## WebSocket /api/speech/transcribe/stream
+
+语音转文字实时流式接口。前端连接 WebSocket 后，将浏览器麦克风音频转换为 `16kHz mono pcm`，按小块发送二进制消息；后端把音频流转发给 ASR provider，并把识别片段实时推回前端。
+
+Client messages:
+
+```text
+BinaryMessage: 16kHz mono pcm audio chunk
+TextMessage: {"type":"end"}
+```
+
+Server message:
+
+```json
+{
+  "type": "chunk",
+  "text": "今天晚上七点在上海",
+  "language": "zh",
+  "engine": "stream",
+  "traceId": "speech_xxx",
+  "sequence": 1,
+  "timestamp": 1780000000000,
+  "finalChunk": false,
+  "fallback": false
+}
+```
+
+`sequence` 用于前端按顺序拼接；`timestamp` 用于实时性标识；`finalChunk=true` 表示当前句子或本轮识别结束；`fallback=true` 表示实时链路不可用时返回降级提示。
 ## POST /api/collab/shares
 
 创建协同分享。

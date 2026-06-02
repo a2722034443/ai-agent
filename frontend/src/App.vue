@@ -238,7 +238,7 @@
       <button
         type="button"
         :class="{ active: voiceRecording || voiceTranscribing }"
-        :disabled="voiceTranscribing"
+        :disabled="voiceTranscribing && !voiceRecording"
         :title="voiceHint"
         @click="toggleVoice"
       >
@@ -266,6 +266,7 @@ import {
   getMemory,
   getSessionToken,
   renameHistoryThread,
+  speechStreamUrl,
   submitCollabComment,
   transcribeAudio,
   voteShare
@@ -280,8 +281,13 @@ const loading = ref(false)
 const voiceRecording = ref(false)
 const voiceTranscribing = ref(false)
 const voiceError = ref('')
-const mediaRecorder = ref(null)
-const audioChunks = ref([])
+const mediaStream = ref(null)
+const audioContextRef = ref(null)
+const audioProcessor = ref(null)
+const speechSocket = ref(null)
+const voiceBaseText = ref('')
+const voiceCommittedText = ref('')
+const voiceInterimText = ref('')
 const recordingTimer = ref(null)
 const activeView = ref('chat')
 const currentStep = ref('need')
@@ -897,11 +903,11 @@ async function createShareLink() {
 }
 
 async function toggleVoice() {
-  if (voiceTranscribing.value) return
   if (voiceRecording.value) {
     stopVoiceRecording()
     return
   }
+  if (voiceTranscribing.value) return
   await startVoiceRecording()
 }
 
@@ -913,22 +919,41 @@ async function startVoiceRecording() {
   }
   try {
     await ensureSession()
+    voiceBaseText.value = message.value
+    voiceCommittedText.value = ''
+    voiceInterimText.value = ''
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    const recorder = new MediaRecorder(stream)
-    audioChunks.value = []
-    recorder.ondataavailable = event => {
-      if (event.data?.size) audioChunks.value.push(event.data)
-    }
-    recorder.onstop = async () => {
-      stream.getTracks().forEach(track => track.stop())
-      await submitVoiceRecording()
-    }
-    mediaRecorder.value = recorder
-    recorder.start()
+    mediaStream.value = stream
     voiceRecording.value = true
+    voiceTranscribing.value = true
+    const socket = new WebSocket(speechStreamUrl())
+    socket.binaryType = 'arraybuffer'
+    socket.onmessage = event => {
+      const payload = JSON.parse(event.data)
+      if (payload.type === 'status' && payload.status === 'ready') {
+        voiceError.value = ''
+        return
+      }
+      if (payload.type === 'error') {
+        handleSpeechStreamMessage(payload)
+        return
+      }
+      handleSpeechStreamMessage(payload)
+    }
+    socket.onclose = () => {
+      voiceTranscribing.value = false
+      speechSocket.value = null
+    }
+    await new Promise((resolve, reject) => {
+      socket.onopen = resolve
+      socket.onerror = reject
+    })
+    speechSocket.value = socket
+    await startPcmStreaming(stream, socket)
     recordingTimer.value = window.setTimeout(() => stopVoiceRecording(), 30000)
   } catch (err) {
     voiceError.value = err?.name === 'NotAllowedError' ? '麦克风权限被拒绝' : '无法启动录音'
+    stopVoiceRecording()
   }
 }
 
@@ -937,32 +962,99 @@ function stopVoiceRecording() {
     window.clearTimeout(recordingTimer.value)
     recordingTimer.value = null
   }
-  const recorder = mediaRecorder.value
-  if (recorder && recorder.state !== 'inactive') recorder.stop()
+  stopPcmStreaming()
+  if (speechSocket.value?.readyState === WebSocket.OPEN) {
+    speechSocket.value.send(JSON.stringify({ type: 'end' }))
+  } else {
+    speechSocket.value?.close()
+  }
+  mediaStream.value?.getTracks().forEach(track => track.stop())
+  mediaStream.value = null
   voiceRecording.value = false
 }
 
-async function submitVoiceRecording() {
-  if (!audioChunks.value.length) return
-  voiceTranscribing.value = true
-  voiceError.value = ''
-  try {
-    const rawBlob = new Blob(audioChunks.value, { type: audioChunks.value[0]?.type || 'audio/webm' })
-    const wavBlob = await convertBlobToWav(rawBlob)
-    const file = new File([wavBlob], `voice-${Date.now()}.wav`, { type: 'audio/wav' })
-    const result = await transcribeAudio(file)
-    if (result?.text) {
-      message.value = message.value ? `${message.value}${result.text}` : result.text
-    } else {
-      voiceError.value = '没有识别到文字'
-    }
-  } catch (err) {
-    voiceError.value = err?.payload?.error || err?.message || '语音识别失败'
-  } finally {
-    voiceTranscribing.value = false
-    audioChunks.value = []
-    mediaRecorder.value = null
+function handleSpeechStreamMessage(payload) {
+  if (payload.type === 'error') {
+    voiceError.value = payload.error || '语音识别失败'
+    return
   }
+  if (payload.type !== 'chunk' || !payload.text) return
+  if (payload.finalChunk) {
+    voiceCommittedText.value = appendSpeechText(voiceCommittedText.value, payload.text)
+    voiceInterimText.value = ''
+  } else {
+    voiceInterimText.value = payload.text
+  }
+  message.value = voiceBaseText.value + voiceCommittedText.value + voiceInterimText.value
+  if (payload.completed) {
+    voiceTranscribing.value = false
+    speechSocket.value?.close()
+  }
+}
+
+function appendSpeechText(existing, next) {
+  if (!existing) return next
+  if (!next) return existing
+  if (next.startsWith(existing)) return next
+  return existing + next
+}
+
+async function startPcmStreaming(stream, socket) {
+  const samplesPerPacket = 1600
+  const audioContext = new AudioContext()
+  await audioContext.resume?.()
+  const source = audioContext.createMediaStreamSource(stream)
+  const processor = audioContext.createScriptProcessor(1024, 1, 1)
+  let pendingSamples = new Int16Array(0)
+  processor.onaudioprocess = event => {
+    if (socket.readyState !== WebSocket.OPEN) return
+    const input = event.inputBuffer.getChannelData(0)
+    pendingSamples = concatPcm(pendingSamples, floatTo16kPcm(input, audioContext.sampleRate))
+    while (pendingSamples.length >= samplesPerPacket) {
+      socket.send(pcmToArrayBuffer(pendingSamples.slice(0, samplesPerPacket)))
+      pendingSamples = pendingSamples.slice(samplesPerPacket)
+    }
+  }
+  source.connect(processor)
+  processor.connect(audioContext.destination)
+  audioContextRef.value = audioContext
+  audioProcessor.value = processor
+}
+
+function stopPcmStreaming() {
+  audioProcessor.value?.disconnect()
+  audioProcessor.value = null
+  audioContextRef.value?.close?.()
+  audioContextRef.value = null
+}
+
+function floatTo16kPcm(input, sourceRate) {
+  const ratio = sourceRate / 16000
+  const length = Math.floor(input.length / ratio)
+  const output = new Int16Array(length)
+  for (let i = 0; i < length; i++) {
+    const sample = Math.max(-1, Math.min(1, input[Math.floor(i * ratio)]))
+    output[i] = sample < 0 ? sample * 0x8000 : sample * 0x7fff
+  }
+  return output
+}
+
+function concatPcm(left, right) {
+  if (!left.length) return right
+  if (!right.length) return left
+  const output = new Int16Array(left.length + right.length)
+  output.set(left)
+  output.set(right, left.length)
+  return output
+}
+
+function pcmToArrayBuffer(samples) {
+  const buffer = new ArrayBuffer(samples.length * 2)
+  const view = new DataView(buffer)
+  for (let i = 0; i < samples.length; i++) {
+    view.setInt16(i * 2, samples[i], true)
+  }
+  return buffer
 }
 
 async function convertBlobToWav(blob) {
