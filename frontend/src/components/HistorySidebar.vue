@@ -2,8 +2,8 @@
   <aside ref="rootRef" :class="['history-sidebar', { open: open }]">
     <div class="history-head">
       <div>
-        <span class="history-sticker">规划历史</span>
-        <strong>最近的小手账</strong>
+        <strong>规划历史</strong>
+        <p>最近的出行对话和方案状态</p>
       </div>
       <button
         type="button"
@@ -17,7 +17,7 @@
 
     <div v-if="!threads.length" class="history-empty">
       <strong>还没有历史</strong>
-      <p>开始一次新的出行规划后，这里会变成你的手账归档页。</p>
+      <p>开始一次新的出行规划后，这里会记录最近的对话和方案。</p>
     </div>
 
     <ol v-else class="history-list">
@@ -27,10 +27,12 @@
         :class="['history-row', { active: selectedThreadId === thread.threadId, menuing: menuThreadId === thread.threadId }]"
       >
         <button type="button" class="history-item" @click="$emit('open-thread', thread.threadId)">
-          <span class="history-pin">便签</span>
           <div class="history-title-row">
             <strong>{{ thread.title }}</strong>
-            <span>{{ statusText(thread.lastStatus) }}</span>
+            <span class="history-status">
+              <i aria-hidden="true"></i>
+              {{ statusText(thread.lastStatus) }}
+            </span>
           </div>
           <p>{{ thread.lastMessagePreview || '暂无消息' }}</p>
           <small>{{ formatTime(thread.lastMessageAt) }}</small>
@@ -133,12 +135,12 @@ function deleteThread(thread) {
   max-height: calc(100svh - var(--topbar-h) - (var(--panel-gap) * 2));
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: .9rem;
-  border: 3px solid var(--ink-strong);
-  border-radius: 1.85rem;
+  gap: .875rem;
+  border: 1px solid rgba(114, 85, 66, .16);
+  border-radius: 1rem;
   padding: 1rem;
-  background: rgba(255, 250, 241, .95);
-  box-shadow: var(--panel-shadow);
+  background: rgba(255, 253, 247, .96);
+  box-shadow: 0 16px 36px rgba(61, 52, 40, .12);
   overflow: hidden;
   container-type: inline-size;
   transform: translateX(calc(-100% - var(--panel-gap)));
@@ -155,45 +157,49 @@ function deleteThread(thread) {
 
 .history-head {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: .75rem;
 }
 
-.history-sticker {
-  display: inline-block;
-  margin-bottom: .28rem;
-  border: 2px solid var(--ink-strong);
-  border-radius: 999px;
-  padding: .22rem .6rem;
-  background: #fff0bf;
-  color: var(--ink-strong);
-  font-size: .76rem;
+.history-head strong {
+  display: block;
+  color: #5f4837;
+  font-size: 1.08rem;
   font-weight: 900;
 }
 
-.history-head strong {
-  display: block;
-  font-size: 1.12rem;
-  font-weight: 900;
+.history-head p {
+  margin: .2rem 0 0;
+  color: #8f725e;
+  font-size: .78rem;
+  line-height: 1.35;
 }
 
 .history-new {
-  min-height: 2.55rem;
-  border-radius: 1rem;
+  flex: none;
+  min-height: 2.5rem;
+  border: 1px solid rgba(114, 85, 66, .16);
+  border-radius: .875rem;
   padding: 0 .9rem;
-  background: linear-gradient(180deg, #fffef8 0%, #ffecc9 100%);
-  color: var(--ink-strong);
+  background: rgba(255, 255, 255, .72);
+  color: #725542;
   font-size: .82rem;
   font-weight: 900;
+  box-shadow: 0 3px 0 rgba(201, 186, 164, .38);
+}
+
+.history-new:hover,
+.history-new:focus-visible {
+  background: rgba(255, 255, 255, .9);
 }
 
 .history-empty {
-  border: 2px dashed rgba(111, 71, 50, .24);
-  border-radius: 1.35rem;
-  padding: 1.2rem 1rem;
-  background: rgba(255,255,255,.76);
-  color: var(--ink-strong);
+  border: 1px solid rgba(114, 85, 66, .12);
+  border-radius: .875rem;
+  padding: 1rem;
+  background: rgba(255,255,255,.72);
+  color: #5f4837;
 }
 
 .history-empty strong {
@@ -203,7 +209,7 @@ function deleteThread(thread) {
 
 .history-empty p {
   margin: .5rem 0 0;
-  color: #8c6752;
+  color: #8f725e;
   font-size: .8125rem;
   line-height: 1.55;
 }
@@ -224,33 +230,23 @@ function deleteThread(thread) {
 .history-item {
   width: 100%;
   min-height: var(--history-card-min-h);
-  border: 2px solid var(--ink-strong);
-  border-radius: 1.35rem;
-  padding: 1rem 3rem 1rem 1rem;
-  background: linear-gradient(180deg, #fffef8 0%, #fff3df 100%);
+  border: 1px solid rgba(114, 85, 66, .14);
+  border-radius: .875rem;
+  padding: .875rem 2.85rem .875rem .875rem;
+  background: rgba(255, 255, 255, .76);
   text-align: left;
-  box-shadow: 0 12px 0 rgba(111, 71, 50, .06), 0 18px 24px rgba(111, 71, 50, .08);
-  transition: transform .18s ease, box-shadow .18s ease, background-color .18s ease;
+  box-shadow: 0 8px 18px rgba(61, 52, 40, .06);
+  transition: transform .18s ease, box-shadow .18s ease, background-color .18s ease, border-color .18s ease;
   display: grid;
   align-content: start;
-  gap: .5rem;
+  gap: .45rem;
 }
 
 .history-row.active .history-item {
-  background: linear-gradient(180deg, #fff9f4 0%, #ffe3d6 100%);
-  box-shadow: 0 14px 0 rgba(111, 71, 50, .08), 0 20px 26px rgba(255, 147, 104, .18);
-  transform: translateY(-2px) rotate(-.4deg);
-}
-
-.history-pin {
-  width: fit-content;
-  border: 2px solid var(--ink-strong);
-  border-radius: 999px;
-  padding: .18rem .55rem;
-  background: #ffd995;
-  color: var(--ink-strong);
-  font-size: .72rem;
-  font-weight: 900;
+  border-color: #bdaea0;
+  background: linear-gradient(180deg, #fffef8 0%, #f7ead4 100%);
+  box-shadow: 0 10px 20px rgba(61, 52, 40, .08);
+  transform: translateY(-1px);
 }
 
 .history-title-row {
@@ -274,22 +270,29 @@ function deleteThread(thread) {
 
 .history-title-row span {
   flex: none;
-  border-radius: 999px;
-  padding: .25rem .55rem;
-  border: 2px solid var(--ink-strong);
-  background: #a9dfbb;
-  color: var(--ink-strong);
-  font-size: .6875rem;
+  display: inline-flex;
+  align-items: center;
+  gap: .28rem;
+  color: #725542;
+  font-size: .72rem;
   line-height: 1.2;
-  font-weight: 900;
+  font-weight: 800;
   max-width: min(5.25rem, 28%);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.history-status i {
+  width: .45rem;
+  height: .45rem;
+  border-radius: 999px;
+  background: #95cf88;
+  box-shadow: 0 0 0 3px rgba(149, 207, 136, .16);
+}
+
 .history-item p {
-  color: #7b5c47;
+  color: #806450;
   font-size: .8125rem;
   line-height: 1.55;
   display: -webkit-box;
@@ -312,12 +315,12 @@ function deleteThread(thread) {
   right: .75rem;
   width: 2rem;
   height: 2rem;
-  border-radius: .8rem;
+  border-radius: .7rem;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: .1875rem;
-  border: 2px solid var(--ink-strong);
+  border: 1px solid rgba(114, 85, 66, .14);
   background: rgba(255,255,255,.88);
   opacity: .2;
   transition: opacity .16s ease, background-color .16s ease;
@@ -334,7 +337,7 @@ function deleteThread(thread) {
   width: .1875rem;
   height: .1875rem;
   border-radius: 999px;
-  background: var(--ink-strong);
+  background: #725542;
 }
 
 .history-menu {
@@ -344,19 +347,20 @@ function deleteThread(thread) {
   min-width: 7.25rem;
   display: grid;
   gap: .25rem;
-  border-radius: 1rem;
+  border-radius: .875rem;
   padding: .375rem;
-  border: 2px solid var(--ink-strong);
-  background: rgba(255,250,241,.98);
-  box-shadow: 0 18px 28px rgba(111, 71, 50, .18);
+  border: 1px solid rgba(114, 85, 66, .16);
+  background: rgba(255,253,247,.98);
+  box-shadow: 0 18px 28px rgba(61, 52, 40, .14);
 }
 
 .history-menu button {
   min-height: 2rem;
-  border-radius: .8rem;
+  border: 0;
+  border-radius: .65rem;
   padding: 0 .625rem;
   background: transparent;
-  color: var(--ink-strong);
+  color: #725542;
   text-align: left;
   font-size: .8125rem;
   font-weight: 800;
@@ -364,7 +368,7 @@ function deleteThread(thread) {
 
 .history-menu button:hover,
 .history-menu button:focus-visible {
-  background: #fff0bf;
+  background: #f7ead4;
 }
 
 .history-menu .danger {
