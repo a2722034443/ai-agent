@@ -74,6 +74,12 @@ def main():
     timeout-ms: {value(cfg, "ASR_TIMEOUT_MS", 15000)}
     max-audio-mb: {value(cfg, "ASR_MAX_AUDIO_MB", 10)}
     max-duration-seconds: {value(cfg, "ASR_MAX_DURATION_SECONDS", 30)}
+    stream:
+      enabled: {str(value(cfg, "ASR_STREAM_ENABLED", True)).lower()}
+      url: {value(cfg, "ASR_STREAM_URL", "wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1")}
+      chunk-millis: {value(cfg, "ASR_STREAM_CHUNK_MILLIS", 200)}
+      chunk-chars: {value(cfg, "ASR_STREAM_CHUNK_CHARS", 15)}
+      silence-fallback-ms: {value(cfg, "ASR_STREAM_SILENCE_FALLBACK_MS", 500)}
 """,
         encoding="utf-8",
     )

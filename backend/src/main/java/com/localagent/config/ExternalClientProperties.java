@@ -131,6 +131,7 @@ public class ExternalClientProperties {
     }
 
     public static class Asr {
+        private final Stream stream = new Stream();
         private boolean enabled = true;
         private String provider = "mock";
         private String mockProvider = "mock";
@@ -150,6 +151,7 @@ public class ExternalClientProperties {
         private int maxAudioMb = 10;
         private int maxDurationSeconds = 30;
 
+        public Stream getStream() { return stream; }
         public boolean isEnabled() { return enabled; }
         public void setEnabled(boolean enabled) { this.enabled = enabled; }
         public String getProvider() { return provider; }
@@ -186,5 +188,24 @@ public class ExternalClientProperties {
         public void setMaxAudioMb(int maxAudioMb) { this.maxAudioMb = maxAudioMb; }
         public int getMaxDurationSeconds() { return maxDurationSeconds; }
         public void setMaxDurationSeconds(int maxDurationSeconds) { this.maxDurationSeconds = maxDurationSeconds; }
+    }
+
+    public static class Stream {
+        private boolean enabled = true;
+        private String url = "wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1";
+        private int chunkMillis = 200;
+        private int chunkChars = 15;
+        private int silenceFallbackMs = 500;
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public String getUrl() { return url; }
+        public void setUrl(String url) { this.url = url; }
+        public int getChunkMillis() { return chunkMillis; }
+        public void setChunkMillis(int chunkMillis) { this.chunkMillis = chunkMillis; }
+        public int getChunkChars() { return chunkChars; }
+        public void setChunkChars(int chunkChars) { this.chunkChars = chunkChars; }
+        public int getSilenceFallbackMs() { return silenceFallbackMs; }
+        public void setSilenceFallbackMs(int silenceFallbackMs) { this.silenceFallbackMs = silenceFallbackMs; }
     }
 }
