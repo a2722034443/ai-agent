@@ -2,6 +2,7 @@ const BASE_URL = import.meta.env.VITE_API_URL || ''
 const TOKEN_KEY = 'lla_token'
 const CLIENT_KEY = 'lla_client_id'
 const DEFAULT_NICKNAME = '立刻游用户'
+const PLAN_REQUEST_TIMEOUT_MS = 20000
 
 export function getSessionToken() {
   return localStorage.getItem(TOKEN_KEY) || ''
@@ -20,17 +21,35 @@ export function clearSessionToken() {
 }
 
 async function request(path, options = {}) {
-  const { skipAuthRecovery = false, headers = {}, ...fetchOptions } = options
+  const { skipAuthRecovery = false, headers = {}, timeoutMs = 0, ...fetchOptions } = options
   const sessionToken = getSessionToken()
-  const res = await fetch(`${BASE_URL}${path}`, {
-    ...fetchOptions,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(sessionToken ? { 'X-Session-Token': sessionToken } : {}),
-      'X-Client-Id': getClientId(),
-      ...headers
+  const controller = timeoutMs > 0 ? new AbortController() : null
+  const timeoutId = controller
+    ? window.setTimeout(() => controller.abort(new DOMException(`Request timeout after ${timeoutMs}ms`, 'AbortError')), timeoutMs)
+    : 0
+  let res
+  try {
+    res = await fetch(`${BASE_URL}${path}`, {
+      ...fetchOptions,
+      signal: controller?.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(sessionToken ? { 'X-Session-Token': sessionToken } : {}),
+        'X-Client-Id': getClientId(),
+        ...headers
+      }
+    })
+  } catch (error) {
+    if (timeoutId) window.clearTimeout(timeoutId)
+    if (error?.name === 'AbortError') {
+      const timeoutError = new Error(`REQUEST_TIMEOUT:${path}:${timeoutMs}`)
+      timeoutError.name = 'RequestTimeoutError'
+      timeoutError.status = 408
+      throw timeoutError
     }
-  })
+    throw error
+  }
+  if (timeoutId) window.clearTimeout(timeoutId)
   const data = await res.json().catch(() => ({}))
   if (res.status === 401 && sessionToken && path !== '/api/sessions' && !skipAuthRecovery) {
     clearSessionToken()
@@ -60,7 +79,8 @@ export function createPlan(payload) {
   const body = typeof payload === 'string' ? { message: payload } : payload
   return request('/api/plans', {
     method: 'POST',
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
+    timeoutMs: PLAN_REQUEST_TIMEOUT_MS
   })
 }
 
