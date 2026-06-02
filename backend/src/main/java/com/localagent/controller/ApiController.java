@@ -10,6 +10,7 @@ import com.localagent.dto.ApiDtos.RenameThreadRequest;
 import com.localagent.dto.ApiDtos.SessionRequest;
 import com.localagent.dto.ApiDtos.SessionResponse;
 import com.localagent.dto.ApiDtos.ShareRequest;
+import com.localagent.dto.ApiDtos.SpeechTranscribeResponse;
 import com.localagent.dto.ApiDtos.ThreadDetailResponse;
 import com.localagent.dto.ApiDtos.ThreadSummaryResponse;
 import com.localagent.dto.ApiDtos.VoteRequest;
@@ -20,12 +21,15 @@ import com.localagent.service.PlanBlockedException;
 import com.localagent.service.PlanningService;
 import com.localagent.service.SessionAuthException;
 import com.localagent.service.SessionService;
+import com.localagent.service.SpeechTranscriptionException;
+import com.localagent.service.SpeechTranscriptionService;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -35,7 +39,9 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api")
@@ -44,16 +50,19 @@ public class ApiController {
     private final PlanningService planningService;
     private final AmapPoiSearchTool poiSearchTool;
     private final CollaborationMockService collaborationMockService;
+    private final SpeechTranscriptionService speechTranscriptionService;
     private final HistoryService historyService;
 
     public ApiController(SessionService sessionService, PlanningService planningService,
                          AmapPoiSearchTool poiSearchTool,
                          CollaborationMockService collaborationMockService,
+                         SpeechTranscriptionService speechTranscriptionService,
                          HistoryService historyService) {
         this.sessionService = sessionService;
         this.planningService = planningService;
         this.poiSearchTool = poiSearchTool;
         this.collaborationMockService = collaborationMockService;
+        this.speechTranscriptionService = speechTranscriptionService;
         this.historyService = historyService;
     }
 
@@ -156,6 +165,13 @@ public class ApiController {
         return collaborationMockService.guardStatus();
     }
 
+    @PostMapping("/speech/transcribe")
+    public SpeechTranscribeResponse transcribe(@RequestHeader("X-Session-Token") String token,
+                                               @RequestParam("file") MultipartFile file) {
+        sessionService.validate(token);
+        return speechTranscriptionService.transcribe(file);
+    }
+
     @ExceptionHandler(SessionAuthException.class)
     public ResponseEntity<Map<String, Object>> unauthorized(SessionAuthException ex) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("error", ex.getMessage()));
@@ -185,6 +201,14 @@ public class ApiController {
         ));
     }
 
+    @ExceptionHandler(SpeechTranscriptionException.class)
+    public ResponseEntity<Map<String, Object>> transcribeFailed(SpeechTranscriptionException ex) {
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of(
+                "error", ex.getMessage(),
+                "status", "TRANSCRIBE_FAILED"
+        ));
+    }
+
     @ExceptionHandler(PlanBlockedException.class)
     public ResponseEntity<Map<String, Object>> blocked(PlanBlockedException ex) {
         return ResponseEntity.status(ex.getHttpStatus()).body(Map.of(
@@ -197,7 +221,10 @@ public class ApiController {
     }
 
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<Map<String, Object>> serverError(Exception ex) {
+    public ResponseEntity<Map<String, Object>> serverError(Exception ex) throws Exception {
+        if (ex instanceof ErrorResponse) {
+            throw ex;
+        }
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
                 "error", "系统暂时不可用，请稍后重试",
                 "status", "ERROR"

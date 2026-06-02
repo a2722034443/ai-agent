@@ -7,6 +7,7 @@ public class ExternalClientProperties {
     private final Amap amap = new Amap();
     private final Search search = new Search();
     private final Llm llm = new Llm();
+    private final Asr asr = new Asr();
 
     public Amap getAmap() {
         return amap;
@@ -18,6 +19,10 @@ public class ExternalClientProperties {
 
     public Llm getLlm() {
         return llm;
+    }
+
+    public Asr getAsr() {
+        return asr;
     }
 
     public static class Amap {
@@ -123,5 +128,84 @@ public class ExternalClientProperties {
         public void setMaxTokens(int maxTokens) { this.maxTokens = maxTokens; }
         public int getTimeoutMs() { return timeoutMs; }
         public void setTimeoutMs(int timeoutMs) { this.timeoutMs = timeoutMs; }
+    }
+
+    public static class Asr {
+        private final Stream stream = new Stream();
+        private boolean enabled = true;
+        private String provider = "mock";
+        private String mockProvider = "mock";
+        private String aliyunProvider = "aliyun";
+        private String baseUrl = "https://nls-gateway-cn-shanghai.aliyuncs.com";
+        private String tokenUrl = "https://nls-meta.cn-shanghai.aliyuncs.com";
+        private String tokenAction = "CreateToken";
+        private String tokenVersion = "2019-02-28";
+        private String tokenTimestampPattern = "yyyy-MM-dd'T'HH:mm:ss'Z'";
+        private String successStatus = "20000000";
+        private String accessKeyId = "";
+        private String accessKeySecret = "";
+        private String appKey = "";
+        private String format = "wav";
+        private int sampleRate = 16000;
+        private int timeoutMs = 15000;
+        private int maxAudioMb = 10;
+        private int maxDurationSeconds = 30;
+
+        public Stream getStream() { return stream; }
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public String getProvider() { return provider; }
+        public void setProvider(String provider) { this.provider = provider; }
+        public String getMockProvider() { return mockProvider; }
+        public void setMockProvider(String mockProvider) { this.mockProvider = mockProvider; }
+        public String getAliyunProvider() { return aliyunProvider; }
+        public void setAliyunProvider(String aliyunProvider) { this.aliyunProvider = aliyunProvider; }
+        public String getBaseUrl() { return baseUrl; }
+        public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
+        public String getTokenUrl() { return tokenUrl; }
+        public void setTokenUrl(String tokenUrl) { this.tokenUrl = tokenUrl; }
+        public String getTokenAction() { return tokenAction; }
+        public void setTokenAction(String tokenAction) { this.tokenAction = tokenAction; }
+        public String getTokenVersion() { return tokenVersion; }
+        public void setTokenVersion(String tokenVersion) { this.tokenVersion = tokenVersion; }
+        public String getTokenTimestampPattern() { return tokenTimestampPattern; }
+        public void setTokenTimestampPattern(String tokenTimestampPattern) { this.tokenTimestampPattern = tokenTimestampPattern; }
+        public String getSuccessStatus() { return successStatus; }
+        public void setSuccessStatus(String successStatus) { this.successStatus = successStatus; }
+        public String getAccessKeyId() { return accessKeyId; }
+        public void setAccessKeyId(String accessKeyId) { this.accessKeyId = accessKeyId; }
+        public String getAccessKeySecret() { return accessKeySecret; }
+        public void setAccessKeySecret(String accessKeySecret) { this.accessKeySecret = accessKeySecret; }
+        public String getAppKey() { return appKey; }
+        public void setAppKey(String appKey) { this.appKey = appKey; }
+        public String getFormat() { return format; }
+        public void setFormat(String format) { this.format = format; }
+        public int getSampleRate() { return sampleRate; }
+        public void setSampleRate(int sampleRate) { this.sampleRate = sampleRate; }
+        public int getTimeoutMs() { return timeoutMs; }
+        public void setTimeoutMs(int timeoutMs) { this.timeoutMs = timeoutMs; }
+        public int getMaxAudioMb() { return maxAudioMb; }
+        public void setMaxAudioMb(int maxAudioMb) { this.maxAudioMb = maxAudioMb; }
+        public int getMaxDurationSeconds() { return maxDurationSeconds; }
+        public void setMaxDurationSeconds(int maxDurationSeconds) { this.maxDurationSeconds = maxDurationSeconds; }
+    }
+
+    public static class Stream {
+        private boolean enabled = true;
+        private String url = "wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1";
+        private int chunkMillis = 200;
+        private int chunkChars = 15;
+        private int silenceFallbackMs = 500;
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public String getUrl() { return url; }
+        public void setUrl(String url) { this.url = url; }
+        public int getChunkMillis() { return chunkMillis; }
+        public void setChunkMillis(int chunkMillis) { this.chunkMillis = chunkMillis; }
+        public int getChunkChars() { return chunkChars; }
+        public void setChunkChars(int chunkChars) { this.chunkChars = chunkChars; }
+        public int getSilenceFallbackMs() { return silenceFallbackMs; }
+        public void setSilenceFallbackMs(int silenceFallbackMs) { this.silenceFallbackMs = silenceFallbackMs; }
     }
 }
