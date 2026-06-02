@@ -25,4 +25,13 @@ public class HttpClientConfig {
                 .version(HttpClient.Version.HTTP_1_1)
                 .build();
     }
+
+    @Bean
+    public HttpClient asrHttpClient(ExternalClientProperties properties) {
+        int timeout = properties.getAsr().getTimeoutMs();
+        return HttpClient.newBuilder()
+                .connectTimeout(Duration.ofMillis(timeout))
+                .version(HttpClient.Version.HTTP_1_1)
+                .build();
+    }
 }

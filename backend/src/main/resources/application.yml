@@ -60,6 +60,32 @@ external:
       model: ${MIMO_SECONDARY_MODEL:}
       max-tokens: ${MIMO_SECONDARY_MAX_TOKENS:1024}
       timeout-ms: ${MIMO_SECONDARY_TIMEOUT_MS:4000}
+  asr:
+    enabled: ${ASR_ENABLED:true}
+    provider: ${ASR_PROVIDER:mock}
+    mock-provider: ${ASR_MOCK_PROVIDER:mock}
+    aliyun-provider: ${ASR_ALIYUN_PROVIDER:aliyun}
+    base-url: ${ASR_BASE_URL:https://nls-gateway-cn-shanghai.aliyuncs.com}
+    token-url: ${ASR_TOKEN_URL:https://nls-meta.cn-shanghai.aliyuncs.com}
+    token-action: ${ASR_TOKEN_ACTION:CreateToken}
+    token-version: "${ASR_TOKEN_VERSION:2019-02-28}"
+    token-timestamp-pattern: "${ASR_TOKEN_TIMESTAMP_PATTERN:yyyy-MM-dd'T'HH:mm:ss'Z'}"
+    success-status: "${ASR_SUCCESS_STATUS:20000000}"
+    access-key-id: ${ALIYUN_ACCESS_KEY_ID:}
+    access-key-secret: ${ALIYUN_ACCESS_KEY_SECRET:}
+    app-key: ${ALIYUN_NLS_APP_KEY:}
+    format: ${ASR_AUDIO_FORMAT:wav}
+    sample-rate: ${ASR_SAMPLE_RATE:16000}
+    timeout-ms: ${ASR_TIMEOUT_MS:15000}
+    max-audio-mb: ${ASR_MAX_AUDIO_MB:10}
+    max-duration-seconds: ${ASR_MAX_DURATION_SECONDS:30}
+    # Realtime ASR WebSocket controls.
+    stream:
+      enabled: ${ASR_STREAM_ENABLED:true}
+      url: ${ASR_STREAM_URL:wss://nls-gateway-cn-shanghai.aliyuncs.com/ws/v1}
+      chunk-millis: ${ASR_STREAM_CHUNK_MILLIS:200}
+      chunk-chars: ${ASR_STREAM_CHUNK_CHARS:15}
+      silence-fallback-ms: ${ASR_STREAM_SILENCE_FALLBACK_MS:500}
 
 agent:
   pipeline: ${AGENT_PIPELINE_PATH:../agents/pipeline.yml}
