@@ -3,7 +3,6 @@
     <div class="map-head">
       <div class="map-title">
         <span class="map-sticker">路线地图</span>
-        <strong>把路线钉在这一页</strong>
       </div>
       <div class="map-actions">
         <button type="button" @click="collapsed = !collapsed">{{ collapsed ? '展开地图' : '折叠地图' }}</button>
@@ -11,7 +10,7 @@
       </div>
     </div>
 
-    <div v-if="!collapsed" class="map-body">
+    <div v-show="!collapsed" class="map-body">
       <div v-if="loading" class="map-skeleton" aria-label="地图加载中">
         <span></span>
         <i></i>
@@ -68,6 +67,11 @@ watch(() => [props.activeRank, props.plans], () => {
 watch(collapsed, async value => {
   if (!value) {
     await nextTick()
+    if (!map && amap && mapRef.value) {
+      recreateMap()
+      return
+    }
+    lastSignature = ''
     map?.resize()
     scheduleRender(0)
   }
@@ -110,6 +114,25 @@ async function initMap() {
     loading.value = false
     error.value = err?.message || 'load-failed'
   }
+}
+
+function recreateMap() {
+  if (!amap || !mapRef.value) return
+  map?.destroy?.()
+  map = new amap.Map(mapRef.value, {
+    zoom: 13,
+    center: defaultCenter(),
+    viewMode: '2D',
+    mapStyle: 'amap://styles/normal',
+    features: ['bg', 'road', 'building'],
+    zoomEnable: true,
+    dragEnable: true,
+    showLabel: true
+  })
+  infoWindow = new amap.InfoWindow({ offset: new amap.Pixel(0, -32), isCustom: true })
+  mapReady.value = true
+  lastSignature = ''
+  scheduleRender(0)
 }
 
 function scheduleRender(delay = 120) {
@@ -414,21 +437,17 @@ onBeforeUnmount(() => {
 }
 
 .map-title {
-  display: grid;
-  gap: .28rem;
-}
-
-.map-title strong {
-  font-size: 1.05rem;
+  display: flex;
+  align-items: center;
 }
 
 .map-sticker {
   width: fit-content;
-  border: 2px solid var(--ink-strong);
+  border: 1px solid rgba(145, 120, 95, .22);
   border-radius: 999px;
   padding: .2rem .6rem;
-  background: #ffd995;
-  color: var(--ink-strong);
+  background: rgba(255, 221, 149, .52);
+  color: #7a5b47;
   font-size: .76rem;
   font-weight: 900;
 }
@@ -443,12 +462,12 @@ onBeforeUnmount(() => {
 .map-actions button,
 .map-error button {
   min-height: 2.5rem;
-  border: 2px solid var(--ink-strong);
+  border: 1px solid rgba(145, 120, 95, .16);
   border-radius: .95rem;
   padding: 0 .8rem;
-  background: rgba(255,255,255,.9);
-  color: var(--ink-strong);
-  box-shadow: 0 8px 18px rgba(111, 71, 50, .12);
+  background: rgba(255,255,255,.62);
+  color: #6c4e3d;
+  box-shadow: none;
   font-size: .8rem;
   font-weight: 900;
   cursor: pointer;
@@ -458,7 +477,7 @@ onBeforeUnmount(() => {
   position: relative;
   height: 420px;
   margin: 0 .9rem .9rem;
-  border: 2px dashed rgba(111, 71, 50, .2);
+  border: 1px dashed rgba(145, 120, 95, .14);
   border-radius: 1.4rem;
   overflow: hidden;
   background: rgba(255,255,255,.62);
@@ -535,12 +554,12 @@ onBeforeUnmount(() => {
 
 .unavailable-list span,
 .guard-notice {
-  border: 2px solid var(--ink-strong);
+  border: 1px solid rgba(145, 120, 95, .16);
   border-radius: 1rem;
   padding: 7px 10px;
   background: rgba(255,250,241,.94);
   color: #8c6752;
-  box-shadow: 0 8px 18px rgba(111,71,50,.12);
+  box-shadow: none;
   font-size: 12px;
   font-weight: 800;
 }

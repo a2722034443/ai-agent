@@ -32,14 +32,7 @@
         </button>
         <button class="brand" type="button" @click="activeView = 'chat'">
           <span class="brand-mark">
-            <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-              <circle cx="32" cy="32" r="27" fill="#ffd995" stroke="#73452f" stroke-width="3" />
-              <path d="M18 29c4-10 24-15 32-8 6 5 5 17-2 24-7 7-22 7-30-1-6-6-7-10 0-15Z" fill="#76a8ff" opacity=".82" />
-              <path d="M22 22c3-4 9-6 14-6 6 0 11 2 14 5" stroke="#73452f" stroke-width="3" stroke-linecap="round" />
-              <circle cx="25" cy="31" r="2.6" fill="#73452f" />
-              <circle cx="39" cy="31" r="2.6" fill="#73452f" />
-              <path d="M27 40c2 2 8 2 10 0" stroke="#73452f" stroke-width="3" stroke-linecap="round" />
-            </svg>
+            <img :src="brandIcon" alt="立刻游品牌图标" />
           </span>
           <span class="brand-copy">
             <strong>立刻游</strong>
@@ -49,11 +42,7 @@
       <div class="meta">
         <span class="topbar-status">{{ todayText }}</span>
         <button class="avatar" type="button" @click="activeView = 'profile'">
-          <svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <circle cx="24" cy="24" r="21" fill="#fff4df" stroke="#73452f" stroke-width="2.5" />
-            <circle cx="24" cy="18" r="6" fill="#ff9d7b" />
-            <path d="M13 35c3-6 8-9 11-9s8 3 11 9" fill="#7faeff" stroke="#73452f" stroke-width="2.5" stroke-linecap="round" />
-          </svg>
+          <img :src="profileIcon" alt="个人中心图标" />
         </button>
       </div>
     </header>
@@ -185,13 +174,7 @@
         <ol v-if="!showPlanWorkspace" class="message-list">
           <li v-for="item in messages" :key="item.id" :class="['message-row', item.role]">
             <span v-if="item.role === 'assistant'" class="bubble-avatar">
-              <svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-                <circle cx="24" cy="24" r="20" fill="#ffd995" stroke="#73452f" stroke-width="2.6" />
-                <path d="M13 26c5-8 15-12 24-10 5 1 8 6 8 12 0 9-8 13-17 13-11 0-20-5-20-15 0-4 2-7 5-10Z" fill="#7faeff" opacity=".88" />
-                <circle cx="19" cy="24" r="2.4" fill="#73452f" />
-                <circle cx="30" cy="24" r="2.4" fill="#73452f" />
-                <path d="M20 31c3 2 7 2 10 0" stroke="#73452f" stroke-width="2.6" stroke-linecap="round" />
-              </svg>
+              <img :src="brandIcon" alt="立刻游助手头像" />
             </span>
             <article class="bubble">
               <time>{{ item.time }}</time>
@@ -307,13 +290,7 @@
 
       <footer v-if="showComposer" class="composer scrapbook-panel">
         <span class="assistant-dot">
-          <svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <circle cx="24" cy="24" r="21" fill="#ffd995" stroke="#73452f" stroke-width="2.5" />
-            <path d="M10 26c4-7 13-11 22-10 6 1 10 5 10 11 0 10-8 14-18 14S6 38 6 29c0-2 2-5 4-7Z" fill="#8eb7ff" />
-            <circle cx="19" cy="24" r="2.3" fill="#73452f" />
-            <circle cx="29" cy="24" r="2.3" fill="#73452f" />
-            <path d="M19 31c3 2 7 2 10 0" stroke="#73452f" stroke-width="2.5" stroke-linecap="round" />
-          </svg>
+          <img :src="brandIcon" alt="立刻游助手图标" />
         </span>
         <AnimalInput
           v-model="message"
@@ -343,9 +320,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { Button as AnimalButton, Card as AnimalCard, Input as AnimalInput } from 'animal-island-vue'
 import 'animal-island-vue/style'
+import brandIcon from './assets/brand/brand-icon.png'
 import irasutoyaCollab from './assets/demo-only/irasutoya/collab-talk.png'
 import irasutoyaMemory from './assets/demo-only/irasutoya/family-memory.png'
 import irasutoyaWelcome from './assets/demo-only/irasutoya/family-outing.png'
+import profileIcon from './assets/brand/profile-icon.png'
 import {
   confirmPlan,
   createPlan,
@@ -409,8 +388,8 @@ const showComposer = computed(() => activeView.value !== 'chat' || currentStep.v
 const themeHero = computed(() => {
   return {
     badge: 'Animal-inspired Demo',
-    title: '像生活游戏一样，把本地出行轻松安排明白',
-    description: '欢迎区用插画承接情绪，功能入口保持前排；下面的卡片、按钮和输入区统一收口成更完整的 animal UI。',
+    title: '嗨，我是你的出行助理',
+    description: '一句话告诉我所有人的需求，我会帮你查地点、排路线、订东西，出发当天继续守护。',
     image: IRASUTOYA_IMAGES.welcome
   }
 })
@@ -555,11 +534,21 @@ async function plan() {
   try {
     await ensureSession()
     const planningMessage = await enrichMessageWithCurrentLocation(text)
+    console.info('[plan] start', {
+      threadId: currentThreadId.value || null,
+      textLength: planningMessage.length
+    })
     const data = await createPlan({
       message: planningMessage,
       planCount: 3,
       stopCountPreference: '标准',
       ...(currentThreadId.value ? { threadId: currentThreadId.value } : {})
+    })
+    console.info('[plan] success', {
+      threadId: data?.threadId || null,
+      planId: data?.planId || null,
+      status: data?.status || null,
+      optionCount: Array.isArray(data?.options) ? data.options.length : 0
     })
     applyPlanResponse(data)
     replaceLoading(loadingId, {
@@ -571,6 +560,12 @@ async function plan() {
     message.value = ''
     await loadThreads()
   } catch (err) {
+    console.error('[plan] failed', {
+      name: err?.name || 'Error',
+      message: err?.message || '',
+      status: err?.status || null,
+      payload: err?.payload || null
+    })
     replaceLoading(loadingId, {
       role: 'assistant',
       text: friendlyError(err),
@@ -593,6 +588,11 @@ async function submitClarification() {
   messages.value.push({ id: loadingId, role: 'assistant', loading: true, time: nowText() })
   try {
     await ensureSession()
+    console.info('[clarification] submit', {
+      threadId: currentThreadId.value || null,
+      previousPlanId: currentPlanId.value || null,
+      answerKeys: Object.keys(answers)
+    })
     const data = await createPlan({
       message: summaryText,
       planCount: 3,
@@ -624,6 +624,12 @@ async function submitClarification() {
     })
     await loadThreads()
   } catch (err) {
+    console.error('[clarification] failed', {
+      name: err?.name || 'Error',
+      message: err?.message || '',
+      status: err?.status || null,
+      payload: err?.payload || null
+    })
     replaceLoading(loadingId, { role: 'assistant', text: friendlyError(err), time: nowText() })
     await loadThreads()
   } finally {
@@ -1011,6 +1017,9 @@ function scrollToBottom() {
 }
 
 function friendlyError(err) {
+  if (err?.name === 'RequestTimeoutError' || String(err?.message || '').startsWith('REQUEST_TIMEOUT:')) {
+    return '抱歉，这次规划超时了。通常是外部服务响应过慢，你可以稍后重试，或先把需求说得更短一些。'
+  }
   if (err?.status === 422) return '抱歉，暂时没有找到完全符合的方案，要不要扩大到 5km 内，或者放宽一点需求？'
   return '抱歉，刚刚网络有点小问题，要不要再试一次？'
 }
@@ -1048,7 +1057,7 @@ function friendlyError(err) {
     radial-gradient(circle at 82% 82%, rgba(255, 216, 127, .25), transparent 18%),
     linear-gradient(180deg, #fffef8 0%, #fff6e8 48%, #ffeeda 100%);
   padding: calc(var(--topbar-h) + 1.75rem) 1.5rem 7rem;
-  font-family: "Trebuchet MS", "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+  font-family: inherit;
   font-size: 1rem;
 }
 
@@ -1208,7 +1217,7 @@ input {
 }
 
 .brand-mark,
-.brand-mark svg {
+.brand-mark img {
   width: 3rem;
   height: 3rem;
   display: block;
@@ -1245,10 +1254,12 @@ input {
   background: linear-gradient(180deg, #fffef8 0%, #ffd6ba 100%);
 }
 
-.avatar svg {
+.avatar img {
   width: 100%;
   height: 100%;
   display: block;
+  object-fit: contain;
+  border-radius: .75rem;
 }
 
 .app-layout {
@@ -1654,10 +1665,10 @@ input {
   display: inline-flex;
   align-items: center;
   gap: .4rem;
-  border: 2px solid var(--ink-strong);
+  border: 1px solid rgba(145, 120, 95, .28);
   border-radius: 999px;
   padding: .38rem .75rem;
-  background: rgba(255, 255, 255, .82);
+  background: rgba(255, 255, 255, .66);
   color: #725542;
   font-size: .84rem;
   font-weight: 800;
@@ -1680,16 +1691,45 @@ input {
   margin-top: 1rem;
 }
 
-.plan-card footer button {
+.plan-card footer :deep(.animal-btn) {
   min-height: 2.9rem;
   border-radius: 1rem;
-  padding: 0 .9rem;
-  background: rgba(255, 255, 255, .82);
+  padding: 0 1rem;
+  border: 1px solid rgba(145, 120, 95, .18);
+  background: rgba(255, 255, 255, .62);
+  color: #6f5140;
+  box-shadow: none;
+  font-weight: 800;
+  opacity: 1;
 }
 
-.plan-card footer .pick-button {
-  background: linear-gradient(180deg, var(--peach) 0%, var(--peach-deep) 100%);
-  color: #fff;
+.plan-card footer :deep(.animal-btn.pick-button) {
+  border-color: rgba(145, 120, 95, .22);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .8) 0%, rgba(246, 239, 226, .92) 100%);
+  color: #6c4e3d !important;
+  box-shadow: 0 1px 0 rgba(176, 163, 145, .22);
+  font-weight: 900;
+}
+
+.plan-card footer :deep(.animal-btn.pick-button:hover:not(:disabled)),
+.plan-card footer :deep(.animal-btn.pick-button:focus-visible:not(:disabled)) {
+  box-shadow: 0 2px 0 rgba(176, 163, 145, .24);
+}
+
+.plan-card footer :deep(.animal-btn:disabled),
+.plan-card footer :deep(.animal-btn.pick-button:disabled) {
+  opacity: 1;
+  border-color: rgba(200, 188, 171, .9);
+  background: rgba(243, 237, 226, .96);
+  color: rgba(154, 138, 120, .95);
+  box-shadow: none;
+}
+
+.plan-card footer :deep(.animal-btn.pick-button span),
+.plan-card footer :deep(.animal-btn.pick-button) {
+  color: #6c4e3d !important;
+  -webkit-text-fill-color: #6c4e3d;
+  text-shadow: none;
 }
 
 .plan-detail {
@@ -1740,11 +1780,12 @@ input {
   flex: none;
 }
 
-.bubble-avatar svg,
-.assistant-dot svg {
+.bubble-avatar img,
+.assistant-dot img {
   width: 100%;
   height: 100%;
   display: block;
+  object-fit: contain;
 }
 
 .bubble {
@@ -2090,7 +2131,20 @@ input {
     radial-gradient(circle at 10% 14%, rgba(245, 211, 107, .28), transparent 16%),
     radial-gradient(circle at 84% 16%, rgba(143, 211, 202, .24), transparent 18%),
     linear-gradient(180deg, #f7f5e8 0%, #f2ebd9 100%);
-  font-family: Nunito, "Noto Sans SC", "Zen Maru Gothic", "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei", sans-serif;
+  font-family: var(--app-font-family);
+}
+
+.theme-animal,
+.theme-animal button,
+.theme-animal input,
+.theme-animal textarea,
+.theme-animal select,
+.theme-animal :deep(.animal-btn),
+.theme-animal :deep(.animal-input),
+.theme-animal :deep(.animal-input__inner),
+.theme-animal :deep([class^='animal-']),
+.theme-animal :deep([class*=' animal-']) {
+  font-family: var(--app-font-family) !important;
 }
 
 .theme-animal .paper-doodles {
@@ -2104,10 +2158,10 @@ input {
 .theme-animal .page-panel,
 .theme-animal .composer,
 .theme-animal :deep(.trip-map-panel) {
-  border-width: 2px;
-  border-color: #a89878;
+  border-width: 1px;
+  border-color: rgba(168, 152, 120, .42);
   background: rgba(248, 248, 240, .94);
-  box-shadow: 0 8px 0 rgba(189, 174, 160, .7), 0 18px 28px rgba(61, 52, 40, .08);
+  box-shadow: 0 5px 0 rgba(189, 174, 160, .32), 0 12px 22px rgba(61, 52, 40, .05);
 }
 
 .theme-animal .topbar {
@@ -2115,32 +2169,38 @@ input {
 }
 
 .theme-animal button {
-  border-width: 2px;
-  border-color: #aaa69d;
+  border-width: 1px;
+  border-color: rgba(168, 152, 120, .32);
   border-radius: 1.4rem;
 }
 
 .theme-animal button:hover:not(:disabled),
 .theme-animal button:focus-visible:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 6px 0 rgba(189, 174, 160, .9);
+  box-shadow: 0 2px 0 rgba(189, 174, 160, .24);
 }
 
 .theme-animal .history-toggle,
 .theme-animal .avatar,
-.theme-animal .topbar-status,
-.theme-animal .prompt-sticker,
-.theme-animal .tool-button,
-.theme-animal .plan-card footer button,
-.theme-animal .meta-chip,
 .theme-animal .memory-grid span,
 .theme-animal .comments li,
 .theme-animal .execution-panel li,
 .theme-animal .clarify-card input,
 .theme-animal .comment-box input {
-  border-color: #c4b89e;
+  border-color: rgba(168, 152, 120, .28);
   background: #fdfbf2;
-  box-shadow: 0 4px 0 rgba(212, 201, 180, .9);
+  box-shadow: 0 1px 0 rgba(212, 201, 180, .24);
+}
+
+.theme-animal .topbar-status,
+.theme-animal .prompt-sticker,
+.theme-animal .tool-button,
+.theme-animal .plan-card footer button,
+.theme-animal .meta-chip {
+  border-width: 1px;
+  border-color: rgba(168, 152, 120, .16);
+  background: rgba(255, 253, 247, .62);
+  box-shadow: none;
 }
 
 .theme-animal .step-card.current,
@@ -2155,10 +2215,10 @@ input {
 .theme-animal .pick-button,
 .theme-animal .comment-box button,
 .theme-animal .plan-button {
-  border-color: #f8f8f0;
-  background: linear-gradient(180deg, #f8f8f0 0%, #efe6d4 100%);
-  color: #725542;
-  box-shadow: 0 5px 0 #bdaea0;
+  border-color: rgba(168, 152, 120, .18);
+  background: linear-gradient(180deg, rgba(255, 255, 255, .78) 0%, rgba(244, 236, 223, .94) 100%);
+  color: #6c4e3d;
+  box-shadow: 0 1px 0 rgba(176, 163, 145, .2);
 }
 
 .theme-animal .summary-share:hover:not(:disabled),
@@ -2166,7 +2226,7 @@ input {
 .theme-animal .pick-button:hover:not(:disabled),
 .theme-animal .comment-box button:hover:not(:disabled),
 .theme-animal .plan-button:hover:not(:disabled) {
-  box-shadow: 0 6px 0 #bdaea0;
+  box-shadow: 0 2px 0 rgba(176, 163, 145, .24);
 }
 
 .theme-animal .welcome-badge,

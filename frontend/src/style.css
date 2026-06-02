@@ -1,5 +1,6 @@
 :root {
-  font-family: "Trebuchet MS", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  --app-font-family: Nunito, "Noto Sans SC", "Zen Maru Gothic", "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei", sans-serif;
+  font-family: var(--app-font-family);
   color: #563321;
   background: #fff7ec;
   font-synthesis: none;
@@ -19,8 +20,10 @@ body {
   min-width: 320px;
   margin: 0;
   background: #fff7ec;
+  font-family: var(--app-font-family);
 }
 
 #app {
   min-height: 100vh;
+  font-family: var(--app-font-family);
 }
