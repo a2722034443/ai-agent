@@ -43,12 +43,11 @@
           </span>
           <span class="brand-copy">
             <strong>立刻游</strong>
-            <small>像掌机游戏一样把本地出行安排明白</small>
           </span>
         </button>
       </div>
       <div class="meta">
-        <span class="date-sticker">{{ todayText }}</span>
+        <span class="topbar-status">{{ todayText }}</span>
         <button class="avatar" type="button" @click="activeView = 'profile'">
           <svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
             <circle cx="24" cy="24" r="21" fill="#fff4df" stroke="#73452f" stroke-width="2.5" />
@@ -73,23 +72,14 @@
 
       <section v-if="activeView === 'chat'" :class="['chat-shell', { 'result-mode': showPlanWorkspace }]">
         <div v-if="messages.length === 0" class="empty-state">
-          <AnimalCard
-            type="title"
-            color="app-green"
-            class="welcome-card animal-welcome-card animal-demo-shell"
-          >
-            <template #title>{{ themeHero.badge }}</template>
+          <section class="welcome-card animal-welcome-card animal-demo-shell">
             <div class="animal-hero-layout">
+              <div class="animal-hero-art">
+                <img :src="themeHero.image" alt="いらすとや 欢迎插画" />
+              </div>
               <div class="animal-demo-copy">
                 <h1>{{ themeHero.title }}</h1>
                 <p>{{ themeHero.description }}</p>
-                <div class="animal-note-strip">
-                  <span class="animal-sticker-chip">贴纸快选</span>
-                  <small>从常见出发场景开始，先把路线意图说清楚，再继续规划。</small>
-                </div>
-              </div>
-              <div class="animal-hero-art">
-                <img :src="themeHero.image" alt="いらすとや 欢迎插画" />
               </div>
             </div>
             <div class="animal-demo-prompts">
@@ -103,7 +93,7 @@
                 {{ sample.label }}
               </AnimalButton>
             </div>
-          </AnimalCard>
+          </section>
         </div>
 
         <div v-else class="step-summary">
@@ -117,7 +107,6 @@
             >
               <span class="step-icon">{{ step.icon }}</span>
               <div class="step-copy">
-                <em>步骤 {{ step.index }}</em>
                 <strong>{{ step.title }}</strong>
                 <small>{{ step.summary }}</small>
               </div>
@@ -142,9 +131,9 @@
               :class="['plan-card', { active: activeMapRank === plan.rank, picked: selectedRank === plan.rank }]"
               @click="viewPlanOnMap(plan.rank)"
             >
-              <span class="plan-ribbon">手账路线 {{ plan.rank }}</span>
               <header>
                 <div class="plan-heading">
+                  <span class="plan-rank">方案 {{ plan.rank }}</span>
                   <strong>{{ plan.name }}</strong>
                   <small>轻松好走，适合一起出发</small>
                 </div>
@@ -205,7 +194,6 @@
               </svg>
             </span>
             <article class="bubble">
-              <span class="bubble-pin">{{ item.role === 'assistant' ? 'AI 小贴士' : '你的便签' }}</span>
               <time>{{ item.time }}</time>
               <p v-if="item.text">{{ item.text }}</p>
               <div v-if="item.loading" class="typing">
@@ -251,7 +239,6 @@
 
       <section v-else-if="activeView === 'collab'" class="page-panel scrapbook-panel">
         <header>
-          <span class="section-sticker">同行投票</span>
           <div>
             <h1>小明分享的出行方案</h1>
             <p>大家一起选方案、提意见，AI 会自动调整。</p>
@@ -289,7 +276,6 @@
 
       <section v-else-if="activeView === 'execute'" class="page-panel scrapbook-panel execution-panel">
         <header>
-          <span class="section-sticker">执行中</span>
           <div>
             <h1>AI 正在帮你把事做完</h1>
             <p>门票、餐厅和提醒会按顺序推进，你只用准备出发。</p>
@@ -306,7 +292,6 @@
 
       <section v-else class="page-panel scrapbook-panel profile-panel">
         <header>
-          <span class="section-sticker">偏好记忆</span>
           <div>
             <h1>全员记忆</h1>
             <p>老婆最近在减肥、孩子需要亲子设施、朋友不吃辣，下次规划会自动适配。</p>
@@ -346,18 +331,9 @@
           </svg>
           <span>语音</span>
         </button>
-        <button type="button" class="tool-button" @click="openImageTool">
-          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <rect x="4" y="5" width="16" height="14" rx="3" stroke="currentColor" stroke-width="2" />
-            <circle cx="9" cy="10" r="1.5" fill="currentColor" />
-            <path d="M6 16l4-4 3 3 2-2 3 3" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-          <span>图片</span>
-        </button>
         <button class="primary-button plan-button" type="button" :disabled="!message.trim() || loading" @click="plan">
           {{ loading ? '规划中' : '规划' }}
         </button>
-        <input ref="fileInput" class="hidden-file" type="file" accept="image/*" @change="handleImagePick" />
       </footer>
     </div>
   </main>
@@ -399,7 +375,6 @@ const token = ref(localStorage.getItem('lla_token') || '')
 const message = ref('')
 const loading = ref(false)
 const voiceRecording = ref(false)
-const fileInput = ref(null)
 const activeView = ref('chat')
 const currentStep = ref('need')
 const messages = ref([])
@@ -1012,17 +987,6 @@ function toggleVoice() {
   if (voiceRecording.value) message.value = '今天下午带老婆孩子出去玩，别离家太远，老婆最近在减肥。'
 }
 
-function openImageTool() {
-  fileInput.value?.click()
-}
-
-function handleImagePick(event) {
-  const file = event.target.files?.[0]
-  if (!file) return
-  message.value = `我上传了一张图片 ${file.name}，想按图片里的风格找附近可玩的地点。`
-  event.target.value = ''
-}
-
 function copyShareMessage() {
   const text = '搞定啦，下午按方案出发，门票、餐厅位和配送我都安排好了。'
   navigator.clipboard?.writeText(text)
@@ -1162,8 +1126,8 @@ button {
 
 button:hover:not(:disabled),
 button:focus-visible:not(:disabled) {
-  transform: translateY(-2px) rotate(-.6deg);
-  box-shadow: 0 8px 0 rgba(111, 71, 50, .08);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 0 rgba(111, 71, 50, .08);
 }
 
 button:disabled {
@@ -1186,6 +1150,7 @@ input {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 1rem;
   padding: .55rem max(1rem, calc((100vw - 58rem) / 2)) .75rem;
   border-radius: 0 0 1.8rem 1.8rem;
 }
@@ -1195,6 +1160,16 @@ input {
   display: flex;
   align-items: center;
   gap: .75rem;
+  min-width: 0;
+}
+
+.topbar-left {
+  flex: 1;
+}
+
+.meta {
+  flex: none;
+  justify-content: flex-end;
 }
 
 .history-toggle {
@@ -1245,28 +1220,27 @@ input {
   line-height: 1;
 }
 
-.brand-copy small {
-  display: block;
-  margin-top: .2rem;
-  color: #8f6a54;
+.topbar-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.25rem;
+  border: 1px solid rgba(114, 85, 66, .14);
+  border-radius: .875rem;
+  padding: 0 .75rem;
+  background: rgba(255, 255, 255, .58);
+  color: #806450;
   font-size: .875rem;
-}
-
-.date-sticker {
-  border: 2px solid var(--ink-strong);
-  border-radius: 999px;
-  padding: .45rem .9rem;
-  background: #fff0bf;
-  color: var(--ink-strong);
-  font-size: .875rem;
-  font-weight: 800;
-  transform: rotate(-2deg);
+  font-weight: 700;
+  white-space: nowrap;
 }
 
 .avatar {
-  width: 3rem;
-  height: 3rem;
-  border-radius: 1rem;
+  width: 2.75rem;
+  height: 2.75rem;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: .875rem;
   padding: .1rem;
   background: linear-gradient(180deg, #fffef8 0%, #ffd6ba 100%);
 }
@@ -1312,33 +1286,36 @@ input {
 
 .welcome-card {
   position: relative;
-  width: min(54rem, 100%);
+  width: min(52rem, 100%);
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(220px, .9fr);
-  gap: 1.5rem 1rem;
-  border-radius: 2rem;
-  padding: 2rem;
+  gap: 1.7rem;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .animal-demo-shell {
-  width: min(54rem, 100%);
+  width: min(52rem, 100%);
 }
 
 .animal-welcome-card {
-  padding: 1.25rem;
+  padding: 0;
 }
 
 .animal-hero-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(220px, .9fr);
-  gap: 1rem 1.4rem;
+  grid-template-columns: minmax(220px, .9fr) minmax(0, 1.1fr);
+  gap: 1rem 2rem;
   align-items: center;
-  margin-bottom: 1rem;
+  margin-bottom: 0;
 }
 
 .animal-demo-copy {
   display: grid;
-  gap: .8rem;
+  gap: .85rem;
+  max-width: 28rem;
 }
 
 .animal-demo-copy h1 {
@@ -1353,48 +1330,20 @@ input {
   line-height: 1.7;
 }
 
-.animal-note-strip {
-  display: grid;
-  gap: .35rem;
-  width: fit-content;
-  max-width: 100%;
-  padding: .7rem .85rem;
-  border: 2px dashed rgba(114, 93, 66, .28);
-  border-radius: 1rem;
-  background: rgba(255, 250, 235, .84);
-}
-
-.animal-note-strip small {
-  color: #8b7b61;
-  font-size: .84rem;
-  line-height: 1.5;
-}
-
-.animal-sticker-chip {
-  width: fit-content;
-  border: 2px solid #aaa69d;
-  border-radius: 999px;
-  padding: .18rem .55rem;
-  background: #f6dd88;
-  color: #725542;
-  font-size: .72rem;
-  font-weight: 900;
-}
-
 .animal-hero-art {
   display: grid;
   place-items: center;
 }
 
 .animal-hero-art img {
-  width: min(100%, 19rem);
+  width: min(100%, 20rem);
   height: auto;
   object-fit: contain;
 }
 
 .animal-demo-prompts {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(8.5rem, 1fr));
   gap: .75rem;
 }
 
@@ -1426,8 +1375,6 @@ input {
 }
 
 .welcome-badge,
-.section-sticker,
-.bubble-pin,
 .clarify-badge {
   width: fit-content;
   border: 2px solid var(--ink-strong);
@@ -1545,13 +1492,6 @@ input {
   gap: .22rem;
 }
 
-.step-copy em {
-  font-style: normal;
-  color: #8c6752;
-  font-size: .78rem;
-  font-weight: 800;
-}
-
 .step-copy strong {
   min-width: 0;
   font-size: 1rem;
@@ -1634,7 +1574,7 @@ input {
   position: relative;
   border: 3px solid var(--ink-strong);
   border-radius: 1.65rem;
-  padding: 1.35rem 1.25rem 1.2rem;
+  padding: 1.2rem 1.25rem;
   background: linear-gradient(180deg, #fffef8 0%, #fff3df 100%);
   cursor: pointer;
   box-shadow: 0 14px 0 rgba(111, 71, 50, .06), 0 22px 28px rgba(111, 71, 50, .1);
@@ -1645,20 +1585,8 @@ input {
 }
 
 .plan-card.active {
-  transform: translateY(-2px) rotate(-.45deg);
+  transform: translateY(-2px);
   box-shadow: 0 16px 0 rgba(111, 71, 50, .08), 0 28px 34px rgba(140, 178, 255, .28);
-}
-
-.plan-ribbon {
-  position: absolute;
-  top: -.8rem;
-  left: 1.2rem;
-  border: 2px solid var(--ink-strong);
-  border-radius: .8rem;
-  padding: .28rem .7rem;
-  background: #ffd995;
-  font-size: .78rem;
-  font-weight: 900;
 }
 
 .plan-card header {
@@ -1671,7 +1599,15 @@ input {
 .plan-heading {
   min-width: 0;
   display: grid;
-  gap: .25rem;
+  gap: .3rem;
+}
+
+.plan-rank {
+  width: fit-content;
+  color: #8a6d58;
+  font-size: .76rem;
+  font-weight: 900;
+  letter-spacing: .08em;
 }
 
 .plan-heading strong {
@@ -1816,17 +1752,13 @@ input {
   max-width: min(44rem, calc(100% - 4rem));
   border: 3px solid var(--ink-strong);
   border-radius: 1.6rem;
-  padding: 1.1rem 1rem 1rem;
+  padding: 1rem;
   background: linear-gradient(180deg, #fffef8 0%, #fff4df 100%);
   box-shadow: 0 14px 0 rgba(111, 71, 50, .06), 0 18px 26px rgba(111, 71, 50, .1);
 }
 
 .message-row.user .bubble {
   background: linear-gradient(180deg, #fffaf7 0%, #ffe1cf 100%);
-}
-
-.bubble-pin {
-  margin-bottom: .7rem;
 }
 
 .bubble time {
@@ -2166,13 +2098,11 @@ input {
 }
 
 .theme-animal .scrapbook-panel,
-.theme-animal .welcome-card,
 .theme-animal .step-card,
 .theme-animal .plan-card,
 .theme-animal .bubble,
 .theme-animal .page-panel,
 .theme-animal .composer,
-.theme-animal .history-sidebar,
 .theme-animal :deep(.trip-map-panel) {
   border-width: 2px;
   border-color: #a89878;
@@ -2198,7 +2128,7 @@ input {
 
 .theme-animal .history-toggle,
 .theme-animal .avatar,
-.theme-animal .date-sticker,
+.theme-animal .topbar-status,
 .theme-animal .prompt-sticker,
 .theme-animal .tool-button,
 .theme-animal .plan-card footer button,
@@ -2240,11 +2170,7 @@ input {
 }
 
 .theme-animal .welcome-badge,
-.theme-animal .section-sticker,
-.theme-animal .bubble-pin,
-.theme-animal .clarify-badge,
-.theme-animal .history-pin,
-.theme-animal .plan-ribbon {
+.theme-animal .clarify-badge {
   background: #f6dd88;
   border-color: #aaa69d;
 }
@@ -2271,8 +2197,11 @@ input {
 }
 
 .theme-animal .animal-welcome-card {
-  border-radius: 2rem;
-  padding: 1.6rem;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 .theme-animal .animal-demo-copy h1 {
@@ -2284,17 +2213,13 @@ input {
   color: #8b7b61;
 }
 
-.theme-animal .animal-note-strip {
-  box-shadow: 0 4px 0 rgba(212, 201, 180, .7);
-}
-
 .theme-animal .animal-hero-art img,
 .theme-animal .panel-illustration img {
   filter: drop-shadow(0 12px 18px rgba(61, 52, 40, .14));
 }
 
 .theme-animal .animal-demo-prompts .animal-btn {
-  min-width: 10.5rem;
+  min-width: 0;
 }
 
 .theme-animal .result-workspace {
@@ -2351,7 +2276,8 @@ input {
     --content-max: min(100%, calc(100vw - 2rem));
   }
 
-  .welcome-card,
+  .animal-hero-layout,
+  .animal-demo-prompts,
   .result-workspace {
     grid-template-columns: 1fr;
   }
@@ -2374,17 +2300,17 @@ input {
     padding-inline: .75rem;
   }
 
-  .brand-copy small,
-  .date-sticker {
+  .topbar-status {
     display: none;
   }
 
   .welcome-card {
-    padding: 1.35rem;
-    border-radius: 1.6rem;
+    padding: 0 .5rem;
+    border-radius: 0;
   }
 
   .quick-prompts,
+  .animal-demo-prompts,
   .step-card-list,
   .clarify-layout,
   .clarify-form,

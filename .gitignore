@@ -16,3 +16,4 @@ __pycache__/
 external-repos/
 *.tmp
 *.bak
+.claude/
