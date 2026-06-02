@@ -57,7 +57,7 @@ try {
     }
 
     Write-Host "Starting Vite frontend on http://localhost:$Port"
-    npm run dev -- --host 0.0.0.0 --port $Port
+    npx vite --host 127.0.0.1 --port $Port
 }
 finally {
     Pop-Location

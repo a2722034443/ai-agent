@@ -21,7 +21,7 @@ export function clearSessionToken() {
 }
 
 async function request(path, options = {}) {
-  const { skipAuthRecovery = false, headers = {}, timeoutMs = 0, ...fetchOptions } = options
+  const { skipAuthRecovery = false, headers = {}, rawBody = false, timeoutMs = 0, ...fetchOptions } = options
   const sessionToken = getSessionToken()
   const controller = timeoutMs > 0 ? new AbortController() : null
   const timeoutId = controller
@@ -33,7 +33,7 @@ async function request(path, options = {}) {
       ...fetchOptions,
       signal: controller?.signal,
       headers: {
-        'Content-Type': 'application/json',
+        ...(rawBody ? {} : { 'Content-Type': 'application/json' }),
         ...(sessionToken ? { 'X-Session-Token': sessionToken } : {}),
         'X-Client-Id': getClientId(),
         ...headers
@@ -89,6 +89,23 @@ export function nearbyPois(payload) {
     method: 'POST',
     body: JSON.stringify(payload)
   })
+}
+
+export function transcribeAudio(file) {
+  const formData = new FormData()
+  formData.append('file', file)
+  return request('/api/speech/transcribe', {
+    method: 'POST',
+    body: formData,
+    rawBody: true
+  })
+}
+
+export function speechStreamUrl() {
+  const base = BASE_URL || window.location.origin
+  const url = new URL('/api/speech/transcribe/stream', base)
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+  return url.toString()
 }
 
 export function confirmPlan(planId, rank) {
