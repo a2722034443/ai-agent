@@ -47,31 +47,59 @@ if ($RedisPort -le 0) {
     $RedisPort = if ($env:REDIS_PORT) { [int]$env:REDIS_PORT } else { 6379 }
 }
 
-$client = [System.Net.Sockets.TcpClient]::new()
-try {
-    $connectTask = $client.ConnectAsync($RedisHost, $RedisPort)
-    if (-not $connectTask.Wait($TimeoutMs)) {
-        throw "Redis connection timed out: ${RedisHost}:$RedisPort"
-    }
+function Test-RedisEndpoint {
+    param(
+        [string]$HostName,
+        [int]$Port,
+        [int]$ReadWriteTimeoutMs
+    )
 
-    $stream = $client.GetStream()
-    $stream.ReadTimeout = $TimeoutMs
-    $stream.WriteTimeout = $TimeoutMs
+    $client = [System.Net.Sockets.TcpClient]::new()
+    try {
+        $connectTask = $client.ConnectAsync($HostName, $Port)
+        if (-not $connectTask.Wait($ReadWriteTimeoutMs)) {
+            return $false
+        }
 
-    # RESP: *1\r\n$4\r\nPING\r\n
-    $payload = [byte[]](42, 49, 13, 10, 36, 52, 13, 10, 80, 73, 78, 71, 13, 10)
-    $stream.Write($payload, 0, $payload.Length)
+        $stream = $client.GetStream()
+        $stream.ReadTimeout = $ReadWriteTimeoutMs
+        $stream.WriteTimeout = $ReadWriteTimeoutMs
 
-    $buffer = New-Object byte[] 64
-    $read = $stream.Read($buffer, 0, $buffer.Length)
-    $response = [System.Text.Encoding]::ASCII.GetString($buffer, 0, $read)
+        # RESP: *1\r\n$4\r\nPING\r\n
+        $payload = [byte[]](42, 49, 13, 10, 36, 52, 13, 10, 80, 73, 78, 71, 13, 10)
+        $stream.Write($payload, 0, $payload.Length)
 
-    if (-not $response.StartsWith("+PONG")) {
+        $buffer = New-Object byte[] 64
+        $read = $stream.Read($buffer, 0, $buffer.Length)
+        $response = [System.Text.Encoding]::ASCII.GetString($buffer, 0, $read)
+
+        if ($response.StartsWith("+PONG")) {
+            Write-Host "Redis OK: ${HostName}:$Port responded PONG"
+            return $true
+        }
+
         throw "Redis responded, but not with PONG. Response: $response"
     }
+    catch {
+        if ($HostName -ne "localhost") {
+            throw
+        }
+        return $false
+    }
+    finally {
+        $client.Dispose()
+    }
+}
 
-    Write-Host "Redis OK: ${RedisHost}:$RedisPort responded PONG"
+$hostsToTry = @($RedisHost)
+if ($RedisHost -eq "localhost") {
+    $hostsToTry += "127.0.0.1"
 }
-finally {
-    $client.Dispose()
+
+foreach ($hostName in $hostsToTry | Select-Object -Unique) {
+    if (Test-RedisEndpoint -HostName $hostName -Port $RedisPort -ReadWriteTimeoutMs $TimeoutMs) {
+        return
+    }
 }
+
+throw "Redis connection timed out: ${RedisHost}:$RedisPort"
