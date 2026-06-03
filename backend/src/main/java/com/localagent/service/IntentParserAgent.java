@@ -91,12 +91,13 @@ public class IntentParserAgent {
     Map<String, Object> keywordFallback(String message) {
         String text = message == null ? "" : message;
         boolean family = containsAny(text, "孩子", "小孩", "儿童", "亲子", "家庭", "宝宝");
-        boolean elderly = containsAny(text, "老人", "长辈", "父母", "行动不便");
+        boolean elderly = containsAny(text, "老人", "长辈", "父母", "爸妈", "妈妈", "爸爸", "行动不便");
         boolean friends = containsAny(text, "朋友", "好友", "同学", "同事", "聚会", "团建");
         boolean couple = containsAny(text, "情侣", "约会", "对象", "女朋友", "男朋友", "夫妻");
-        boolean solo = containsAny(text, "我自己", "一个人", "独自", "单人", "无同行人", "没有同行人", "就我", "只有我");
+        boolean solo = containsAny(text, "我自己", "一个人", "独自", "单人", "无同行人", "没有同行人", "就我", "只有我")
+                || (!family && !friends && !couple && containsAny(text, "我现在在", "我在", "我周末去", "我想去", "我去", "只有3小时", "只有 3 小时"));
         boolean lowCal = containsAny(text, "减肥", "低卡", "清淡", "轻食", "不吃辣", "忌口", "过敏");
-        boolean nearby = containsAny(text, "附近", "不要太远", "别离家太远", "步行距离短", "少走路");
+        boolean nearby = containsAny(text, "附近", "不要太远", "别离家太远", "步行距离短", "少走路", "顺路", "不要绕路", "不用绕");
 
         Map<String, Object> group = new LinkedHashMap<>();
         Integer groupTotal = extractGroupTotal(text, family, friends, couple, solo);
@@ -110,6 +111,9 @@ public class IntentParserAgent {
         if (family) hard.add("儿童友好");
         if (elderly) hard.add("老人友好");
         if (nearby) hard.add("低步行");
+        if (containsAny(text, "全程步行", "步行就可以", "不想坐车", "不要坐车", "不用坐车", "只步行")) hard.add("全程步行");
+        if (containsAny(text, "临时闭馆", "闭馆", "关门", "关闭")) hard.add("POI不可用需替换");
+        if (containsAny(text, "排队要1小时", "排队1小时", "排队太久", "排队过长")) hard.add("排队过长需替换");
         if (lowCal) hard.add("饮食限制");
         if (containsAny(text, "宠物", "狗", "猫")) hard.add("宠物友好");
         if (containsAny(text, "停车", "开车")) hard.add("停车便利");
@@ -132,6 +136,7 @@ public class IntentParserAgent {
         intent.put("soft_preferences", preferences);
         intent.put("requestedPlanCount", extractRequestedPlanCount(text));
         intent.put("requestedStopCount", extractRequestedStopCount(text));
+        intent.put("rawMessage", text);
         intent.put("poiSearchStrategy", defaultPoiSearchStrategy(intent));
         intent.put("confidence", 0.55);
         return normalize(intent);
@@ -168,6 +173,7 @@ public class IntentParserAgent {
         List<String> hard = castStringList(intent.get("hard_constraints"));
         Map<String, Object> preferences = mutableMap(intent.get("soft_preferences"));
         String vibe = String.valueOf(preferences.getOrDefault("vibe", ""));
+        String sourceText = vibe + " " + String.valueOf(intent.getOrDefault("rawMessage", ""));
 
         List<String> activity = new ArrayList<>();
         List<String> dining = new ArrayList<>();
@@ -188,9 +194,25 @@ public class IntentParserAgent {
             activity.addAll(List.of("展览", "文化", "公园", "娱乐"));
             dining.addAll(List.of("餐厅", "简餐", "清淡餐厅"));
         }
+        addIfMentioned(sourceText, activity, "大连世界博览广场", "大连世界博览广场", "世界博览广场");
+        addIfMentioned(sourceText, activity, "上海博物馆", "上海博物馆");
+        addIfMentioned(sourceText, activity, "人民公园", "人民公园");
+        addIfMentioned(sourceText, activity, "故宫", "故宫");
+        addIfMentioned(sourceText, activity, "景山公园", "景山公园");
+        addIfMentioned(sourceText, activity, "岳王庙", "岳王庙");
+        addIfMentioned(sourceText, activity, "曲院风荷", "曲院风荷");
+        addIfMentioned(sourceText, activity, "苏堤", "苏堤");
+        addIfMentioned(sourceText, activity, "断桥", "断桥");
+        addIfMentioned(sourceText, dining, "海鲜", "海鲜", "海鲜餐");
+        addIfMentioned(sourceText, dining, "北京烤鸭", "北京烤鸭", "烤鸭");
+        addIfMentioned(sourceText, dining, "杭帮菜", "杭帮菜");
+        addIfMentioned(sourceText, dining, "小杨生煎", "小杨生煎", "生煎");
+        addIfMentioned(sourceText, extra, "咖啡", "咖啡");
+        addIfMentioned(sourceText, extra, "老北京酸奶", "老北京酸奶", "酸奶");
+        addIfMentioned(sourceText, extra, "龙井", "龙井", "茶");
         if (hard.contains("老人友好") || hard.contains("低步行")) {
-            activity.add(0, "室内");
-            extra.add(0, "商场");
+            activity.add("室内");
+            extra.add("商场");
             notes.add("控制步行距离，优先地铁/停车便利和可休息地点。");
         }
         if (hard.contains("饮食限制") || vibe.contains("清淡") || vibe.contains("低卡")) {
@@ -223,6 +245,12 @@ public class IntentParserAgent {
         return strategy;
     }
 
+    private void addIfMentioned(String text, List<String> target, String keyword, String... mentions) {
+        if (containsAny(text, mentions)) {
+            target.add(0, keyword);
+        }
+    }
+
     private Map<String, Object> location(String text, boolean nearby) {
         Map<String, Object> location = new LinkedHashMap<>();
         double[] coordinates = parseCoordinates(text);
@@ -250,6 +278,17 @@ public class IntentParserAgent {
 
     private Map<String, Object> timeWindow(String text) {
         Map<String, Object> timeWindow = new LinkedHashMap<>();
+        java.util.regex.Matcher range = java.util.regex.Pattern
+                .compile("([01]?\\d|2[0-3])\\s*[:.：]\\s*([0-5]\\d)\\s*[-—~到至]\\s*([01]?\\d|2[0-3])\\s*[:.：]\\s*([0-5]\\d)")
+                .matcher(text == null ? "" : text);
+        if (range.find()) {
+            String start = String.format("%02d:%s", Integer.parseInt(range.group(1)), range.group(2));
+            String end = String.format("%02d:%s", Integer.parseInt(range.group(3)), range.group(4));
+            timeWindow.put("start", start);
+            timeWindow.put("end", end);
+            timeWindow.put("durationMinutes", minutesBetween(start, end));
+            return timeWindow;
+        }
         String explicitStart = extractExplicitStart(text);
         if (explicitStart != null) {
             timeWindow.put("start", explicitStart);
@@ -262,6 +301,17 @@ public class IntentParserAgent {
         Integer duration = extractDurationMinutes(text);
         if (duration != null) timeWindow.put("durationMinutes", duration);
         return timeWindow;
+    }
+
+    private int minutesBetween(String start, String end) {
+        try {
+            java.time.LocalTime from = java.time.LocalTime.parse(start);
+            java.time.LocalTime to = java.time.LocalTime.parse(end);
+            int minutes = (int) java.time.Duration.between(from, to).toMinutes();
+            return minutes > 0 ? minutes : 0;
+        } catch (Exception e) {
+            return 0;
+        }
     }
 
     private String extractExplicitStart(String text) {
@@ -291,6 +341,8 @@ public class IntentParserAgent {
     private Integer extractGroupTotal(String text, boolean family, boolean friends, boolean couple, boolean solo) {
         if (solo) return 1;
         if (couple) return 2;
+        if (containsAny(text, "我和两个朋友", "我跟两个朋友")) return 3;
+        if (containsAny(text, "带爸妈", "带父母", "我和爸妈", "我跟爸妈")) return 3;
         if (containsAny(text, "两个大人一个孩子", "2个大人1个孩子", "两大一小", "一家三口", "三口")) return 3;
         java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(\\d{1,2})\\s*(个)?\\s*(人|朋友|同事|同学)").matcher(text);
         if (matcher.find()) return Integer.parseInt(matcher.group(1));
@@ -302,6 +354,7 @@ public class IntentParserAgent {
         if (solo) return "单人";
         if (couple) return "情侣/夫妻";
         if (family && total != null) return "家庭亲子";
+        if (containsAny(text, "爸妈", "父母")) return "我和父母";
         if (friends && total != null) return "朋友同行";
         return null;
     }
@@ -353,9 +406,18 @@ public class IntentParserAgent {
     }
 
     private Integer extractDurationMinutes(String text) {
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(\\d{1,2})\\s*(个)?\\s*小时").matcher(text);
-        if (matcher.find()) return Integer.parseInt(matcher.group(1)) * 60;
-        if (text.contains("半天")) return 4 * 60;
+        String value = text == null ? "" : text;
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(\\d{1,2})\\s*(个)?\\s*小时").matcher(value);
+        while (matcher.find()) {
+            int from = Math.max(0, matcher.start() - 6);
+            int to = Math.min(value.length(), matcher.end() + 4);
+            String context = value.substring(from, to);
+            if (containsAny(context, "排队", "等位", "等待")) {
+                continue;
+            }
+            return Integer.parseInt(matcher.group(1)) * 60;
+        }
+        if (value.contains("半天")) return 4 * 60;
         return null;
     }
 
@@ -374,11 +436,42 @@ public class IntentParserAgent {
     private String extractLocationHint(String text, String city) {
         if (text == null || text.isBlank()) return null;
         if (containsAny(text, "我附近", "当前位置") || "附近".equals(text.trim())) return null;
+        List<String> preferredAnchors = new ArrayList<>();
         java.util.regex.Matcher matcher = java.util.regex.Pattern
-                .compile("([\\u4e00-\\u9fa5A-Za-z0-9]{2,24}(广场|公园|大学|商场|中心|车站|火车站|地铁站|机场|景区|街|路|区|县|镇|商圈|湖|馆))")
+                .compile("([\\u4e00-\\u9fa5A-Za-z0-9]{2,24}(广场|公园|大学|商场|中心|车站|火车站|地铁站|机场|景区|街|路|区|县|镇|商圈|湖|馆|门))")
                 .matcher(text);
-        if (matcher.find()) return matcher.group(1);
+        while (matcher.find()) {
+            String candidate = cleanLocationCandidate(matcher.group(1));
+            int start = Math.max(0, matcher.start() - 8);
+            int end = Math.min(text.length(), matcher.end() + 4);
+            String context = text.substring(start, end);
+            if (containsAny(context, "我现在在", "我在", "附近", "碰面", "出发", "天安门")) {
+                preferredAnchors.add(candidate);
+            }
+            if (!looksLikeConstraintPhrase(candidate)) {
+                preferredAnchors.add(candidate);
+            }
+        }
+        if (!preferredAnchors.isEmpty()) return preferredAnchors.get(0);
         return city == null || city.isBlank() ? null : city;
+    }
+
+    private boolean looksLikeConstraintPhrase(String candidate) {
+        return containsAny(candidate, "想走", "排队", "预算", "时间", "小时", "分钟", "顺路", "绕路");
+    }
+
+    private String cleanLocationCandidate(String candidate) {
+        String value = candidate == null ? "" : candidate;
+        value = value.replaceFirst("^(我现在在|我想去|我周末去|我在|想去|去|在)", "");
+        int atIndex = value.lastIndexOf("在");
+        if (atIndex > 0 && atIndex < value.length() - 1) {
+            value = value.substring(atIndex + 1);
+        }
+        int goIndex = value.lastIndexOf("去");
+        if (goIndex > 0 && goIndex < value.length() - 1) {
+            value = value.substring(goIndex + 1);
+        }
+        return value;
     }
 
     private String extractCityHint(String text) {

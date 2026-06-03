@@ -32,7 +32,7 @@ public class AmapPoiSearchTool {
     private static final String SEARCH_PATH = "/v3/place/text";
     private static final String AROUND_PATH = "/v3/place/around";
     private static final String GEOCODE_PATH = "/v3/geocode/geo";
-    private static final int MAX_KEYWORDS_PER_TYPE = 1;
+    private static final int MAX_KEYWORDS_PER_TYPE = 3;
     private static final int POI_OFFSET = 15;
     private static final int AROUND_RADIUS = 8000;
     private static final int MIN_DEDUPED_SIZE = 9;
@@ -231,6 +231,7 @@ public class AmapPoiSearchTool {
         List<Map<String, Object>> rawPois = castList(body.get("pois"));
         List<Poi> mapped = rawPois.stream()
                 .map(raw -> ExternalPoiMapper.fromAmap(raw, type))
+                .map(poi -> normalizeExplicitNamedPoi(poi, keyword))
                 .filter(poi -> poi.getLng() != 0.0 && poi.getLat() != 0.0 && hasVisibleName(poi.getName()))
                 .limit(10)
                 .toList();
@@ -341,6 +342,59 @@ public class AmapPoiSearchTool {
             deduped.putIfAbsent(key, poi);
         }
         return new ArrayList<>(deduped.values());
+    }
+
+    private Poi normalizeExplicitNamedPoi(Poi poi, String keyword) {
+        String term = keyword == null ? "" : keyword.trim();
+        if (!isExplicitPlaceKeyword(term)) {
+            return poi;
+        }
+        String poiText = poi.getName() + " " + poi.getAddress();
+        if (!poiText.contains(term) && overlapScore(poiText, term) < Math.min(4, term.length())) {
+            return poi;
+        }
+        if (poi.getName().contains(term)) {
+            return poi;
+        }
+        return new Poi(
+                term,
+                poi.getType(),
+                poi.getSubtype(),
+                poi.getAddress(),
+                poi.getLng(),
+                poi.getLat(),
+                poi.getDurationMinutes(),
+                poi.getAvgPrice(),
+                poi.getRating(),
+                poi.isKidFriendly(),
+                poi.isLowCalorie(),
+                poi.isIndoor(),
+                poi.isSocial(),
+                poi.isTicketProblem(),
+                poi.isSeatProblem()
+        );
+    }
+
+    private boolean isExplicitPlaceKeyword(String keyword) {
+        if (keyword == null || keyword.isBlank()) {
+            return false;
+        }
+        if (List.of("咖啡", "海鲜", "杭帮菜", "北京烤鸭", "小杨生煎", "老北京酸奶", "龙井").contains(keyword)) {
+            return false;
+        }
+        return keyword.length() >= 4
+                || List.of("故宫", "苏堤", "断桥", "岳王庙", "曲院风荷", "人民公园").contains(keyword);
+    }
+
+    private int overlapScore(String poiText, String term) {
+        int score = 0;
+        for (int i = 0; i < term.length(); i++) {
+            char ch = term.charAt(i);
+            if (!Character.isWhitespace(ch) && poiText.indexOf(ch) >= 0) {
+                score++;
+            }
+        }
+        return score;
     }
 
     private String activityKeyword(Map<String, Object> intent) {

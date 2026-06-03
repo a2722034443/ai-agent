@@ -173,6 +173,7 @@ function renderPlan() {
 
 function mapPoints(plan) {
   const timeline = Array.isArray(plan.timeline) ? plan.timeline : []
+  const includeOrigin = plan.route?.includesOrigin === true
   const stops = timeline.map((stop, index) => ({
     ...stop,
     kind: stop.type === '餐饮' ? 'dining' : index === 0 ? 'activity' : 'activity',
@@ -181,6 +182,9 @@ function mapPoints(plan) {
   }))
   const usableStops = stops.filter(hasPoint)
   const unavailable = stops.filter(stop => !hasPoint(stop))
+  if (!includeOrigin) {
+    return { usable: usableStops, unavailable }
+  }
   const first = usableStops[0]
   const origin = hasPoint(props.origin)
     ? { name: '我的位置', address: props.origin.district || props.origin.city || '', kind: 'origin', lng: Number(props.origin.lng), lat: Number(props.origin.lat) }
@@ -198,6 +202,7 @@ function updateRouteLines(points, plan) {
   const totalDistance = Number(route.distanceKm || 0)
   const totalMinutes = Number(route.travelMinutes || 0)
   const segmentMinutes = Array.isArray(route.segmentMinutes) ? route.segmentMinutes : []
+  const segmentDistancesKm = Array.isArray(route.segmentDistancesKm) ? route.segmentDistancesKm : []
   const segments = points.length - 1
   for (let i = 0; i < segments; i++) {
     const from = points[i]
@@ -208,7 +213,7 @@ function updateRouteLines(points, plan) {
     const label = labelFor(i)
     line.setOptions?.({ strokeColor: color, strokeOpacity: 0.9, strokeWeight: 6 })
     label.setPosition([(from.lng + to.lng) / 2, (from.lat + to.lat) / 2])
-    label.setText(`${formatDistance(totalDistance, segments)}，${formatMinutes(segmentMinutes[i], totalMinutes, segments)}分钟车程`)
+    label.setText(`${formatDistance(segmentDistancesKm[i], totalDistance, segments)}，${formatMinutes(segmentMinutes[i], totalMinutes, segments)}分钟车程`)
     line.show()
     label.show()
     result.push(line, label)
@@ -372,9 +377,14 @@ function colorFor(point) {
   return '#13b8a6'
 }
 
-function formatDistance(totalDistance, segments) {
-  if (!totalDistance || !segments) return '约1.2km'
-  return `${Math.max(0.1, Math.round((totalDistance / segments) * 10) / 10)}km`
+function formatDistance(segmentDistance, totalDistance, segments) {
+  const distance = Number(segmentDistance)
+  if (Number.isFinite(distance) && distance > 0) {
+    return distance < 1 ? `${Math.round(distance * 1000)}m` : `${Math.round(distance * 10) / 10}km`
+  }
+  if (!totalDistance || !segments) return '距离待估'
+  const averaged = Math.max(0.1, Math.round((totalDistance / segments) * 10) / 10)
+  return `${averaged}km`
 }
 
 function formatMinutes(segmentValue, totalMinutes, segments) {

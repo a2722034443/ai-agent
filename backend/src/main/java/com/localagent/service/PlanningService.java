@@ -213,7 +213,7 @@ public class PlanningService {
     private Map<String, Object> buildIntent(UUID planId, PlanRequest request, String message) {
         Map<String, Object> parsed = shouldSkipIntentParse(request)
                 ? new LinkedHashMap<>()
-                : intentParserAgent.parse(planId, message);
+                : intentParserAgent.fastParse(planId, message);
         Map<String, Object> previous = previousIntent(request);
         Map<String, Object> intent = mergeIntent(previous, parsed);
         String rawMessage = rawMessage(previous, message);
@@ -537,11 +537,14 @@ public class PlanningService {
                     && !extra.getName().equals(restaurant.getName())) {
                 stops = replaceLastNonDiningStop(stops, extra);
             }
+            Poi origin = originPoi(intent);
+            stops = optimizeStopOrder(origin, stops);
             if (!hasRequiredPoiCoverage(stops)) {
                 tools.recovery(planId, "POI类型不完整", signature(stops), "跳过该候选");
                 continue;
             }
-            if (directRouteDistanceKm(stops) > directRoutePrefilterKm(intent)) {
+            List<Poi> routeStops = routeStops(origin, stops);
+            if (directRouteDistanceKm(routeStops) > directRoutePrefilterKm(intent)) {
                 tools.recovery(planId, "路线直线距离预筛过远", signature(stops), "跳过该候选");
                 continue;
             }
@@ -552,7 +555,8 @@ public class PlanningService {
 
             Map<String, Object> route;
             try {
-                route = routeEstimateTool.route(planId, stops);
+                route = routeEstimateTool.route(planId, routeStops);
+                route.put("includesOrigin", origin != null);
             } catch (PlanBlockedException e) {
                 tools.recovery(planId, "路线生成失败", signature(stops), "跳过该候选");
                 continue;
@@ -563,7 +567,7 @@ public class PlanningService {
                 continue;
             }
             int totalMinutes = tools.totalMinutes(stops, ((Number) route.get("travelMinutes")).intValue());
-            if (isTooShort(intent, totalMinutes)) {
+            if (!hasExplicitEnd(intent) && isTooShort(intent, totalMinutes)) {
                 stops = extendFlexibleStop(stops, durationMinutes(intent) - totalMinutes);
                 totalMinutes = tools.totalMinutes(stops, ((Number) route.get("travelMinutes")).intValue());
             }
@@ -588,8 +592,7 @@ public class PlanningService {
         for (int index = 0; index < sorted.size(); index++) {
             int newRank = index + 1;
             sorted.get(index).put("rank", newRank);
-            sorted.get(index).put("name", newRank == 1 ? "稳妥轻松方案" : newRank == 2 ? "体验丰富方案" : "备用省心方案");
-            sorted.get(index).put("tagline", newRank == 1 ? "距离更近，节奏更稳" : newRank == 2 ? "内容更丰富，适合慢慢玩" : "临时调整也容易执行");
+            enrichCardContent(sorted.get(index), intent, newRank);
         }
         return sorted;
     }
@@ -598,6 +601,77 @@ public class PlanningService {
         boolean hasDining = stops.stream().anyMatch(poi -> poi.getType() == PoiType.DINING);
         boolean hasActivity = stops.stream().anyMatch(poi -> poi.getType() == PoiType.ENTERTAINMENT || poi.getType() == PoiType.CULTURE);
         return stops.size() >= 3 && hasDining && hasActivity;
+    }
+
+    private List<Poi> routeStops(Poi origin, List<Poi> stops) {
+        if (origin == null) {
+            return stops;
+        }
+        List<Poi> routeStops = new ArrayList<>();
+        routeStops.add(origin);
+        routeStops.addAll(stops);
+        return routeStops;
+    }
+
+    private Poi originPoi(Map<String, Object> intent) {
+        double[] anchor = anchor(intent);
+        if (anchor == null) {
+            return null;
+        }
+        Map<String, Object> location = castMap(intent.get("location"));
+        String name = String.valueOf(location.getOrDefault("name",
+                location.getOrDefault("district", location.getOrDefault("city", "出发地"))));
+        if (name.isBlank() || "null".equals(name)) {
+            name = "出发地";
+        }
+        String address = String.valueOf(location.getOrDefault("address", name));
+        return new Poi(name, PoiType.EXTRA, "出发地", address, anchor[0], anchor[1],
+                0, 0, 0, false, false, true, false, false, false);
+    }
+
+    private List<Poi> optimizeStopOrder(Poi origin, List<Poi> stops) {
+        if (stops.size() <= 3) {
+            return stops;
+        }
+        List<Poi> nonDining = new ArrayList<>(stops.stream()
+                .filter(poi -> poi.getType() != PoiType.DINING)
+                .toList());
+        List<Poi> dining = new ArrayList<>(stops.stream()
+                .filter(poi -> poi.getType() == PoiType.DINING)
+                .toList());
+        if (nonDining.isEmpty() || dining.isEmpty()) {
+            return stops;
+        }
+        List<Poi> ordered = new ArrayList<>();
+        Poi cursor = origin == null ? nearestToCentroid(nonDining) : origin;
+        while (!nonDining.isEmpty()) {
+            Poi next = nearest(cursor, nonDining);
+            ordered.add(next);
+            nonDining.remove(next);
+            cursor = next;
+            if (ordered.size() >= Math.max(1, stops.size() - dining.size())) {
+                break;
+            }
+        }
+        Poi diningCursor = cursor;
+        ordered.addAll(dining.stream()
+                .sorted(Comparator.comparingDouble(poi -> distanceKm(diningCursor.getLat(), diningCursor.getLng(), poi.getLat(), poi.getLng())))
+                .toList());
+        return ordered;
+    }
+
+    private Poi nearest(Poi from, List<Poi> candidates) {
+        return candidates.stream()
+                .min(Comparator.comparingDouble(poi -> distanceKm(from.getLat(), from.getLng(), poi.getLat(), poi.getLng())))
+                .orElse(candidates.get(0));
+    }
+
+    private Poi nearestToCentroid(List<Poi> candidates) {
+        double avgLat = candidates.stream().mapToDouble(Poi::getLat).average().orElse(candidates.get(0).getLat());
+        double avgLng = candidates.stream().mapToDouble(Poi::getLng).average().orElse(candidates.get(0).getLng());
+        return candidates.stream()
+                .min(Comparator.comparingDouble(poi -> distanceKm(avgLat, avgLng, poi.getLat(), poi.getLng())))
+                .orElse(candidates.get(0));
     }
 
     private double directRouteDistanceKm(List<Poi> stops) {
@@ -670,8 +744,17 @@ public class PlanningService {
         if (duration <= 0) {
             return true;
         }
+        if (hasExplicitEnd(intent)) {
+            return totalMinutes <= duration;
+        }
         int tolerance = Math.max(30, duration / 5);
         return totalMinutes >= duration - tolerance && totalMinutes <= duration + tolerance;
+    }
+
+    private boolean hasExplicitEnd(Map<String, Object> intent) {
+        Map<String, Object> timeWindow = castMap(intent.get("time_window"));
+        return !String.valueOf(timeWindow.getOrDefault("end", "")).isBlank()
+                && !"null".equals(String.valueOf(timeWindow.get("end")));
     }
 
     private boolean isTooShort(Map<String, Object> intent, int totalMinutes) {
@@ -842,12 +925,19 @@ public class PlanningService {
         List<Integer> segmentMinutes = castSegmentMinutes(route.get("segmentMinutes"));
         LocalTime currentTime = parseStartTime(intent);
 
+        LocalTime departureTime = currentTime;
+        boolean includesOrigin = Boolean.TRUE.equals(route.get("includesOrigin"));
+        if (includesOrigin && !segmentMinutes.isEmpty()) {
+            currentTime = currentTime.plusMinutes(segmentMinutes.get(0));
+        }
+        route.put("departureTime", departureTime.toString());
+
         List<Map<String, Object>> timeline = new ArrayList<>();
         for (int i = 0; i < stops.size(); i++) {
             Poi poi = stops.get(i);
             Map<String, Object> timelineItem = new LinkedHashMap<>();
             timelineItem.put("time", currentTime.toString());
-            timelineItem.put("type", poi.getType() == PoiType.DINING ? "餐饮" : i == 2 ? "补充" : "活动");
+            timelineItem.put("type", poi.getType() == PoiType.DINING ? "餐饮" : poi.getType() == PoiType.EXTRA ? "补充" : "活动");
             timelineItem.put("name", poi.getName());
             timelineItem.put("subtype", poi.getSubtype());
             timelineItem.put("address", poi.getAddress());
@@ -861,8 +951,9 @@ public class PlanningService {
             timeline.add(timelineItem);
             // 累加当前站点停留时间 + 到下一站的交通时间
             currentTime = currentTime.plusMinutes(poi.getDurationMinutes());
-            if (i < segmentMinutes.size()) {
-                currentTime = currentTime.plusMinutes(segmentMinutes.get(i));
+            int nextRouteSegmentIndex = includesOrigin ? i + 1 : i;
+            if (nextRouteSegmentIndex < segmentMinutes.size()) {
+                currentTime = currentTime.plusMinutes(segmentMinutes.get(nextRouteSegmentIndex));
             }
         }
         int groupTotal = groupTotal(intent);
@@ -892,6 +983,285 @@ public class PlanningService {
         option.put("diningName", stops.stream().filter(poi -> poi.getType() == PoiType.DINING).findFirst().orElse(stops.get(1)).getName());
         option.put("lastStop", stops.get(stops.size() - 1).getName());
         return option;
+    }
+
+    private void enrichCardContent(Map<String, Object> option, Map<String, Object> intent, int rank) {
+        List<Map<String, Object>> timeline = castList(option.get("timeline"));
+        Map<String, Object> route = castMap(option.get("route"));
+        List<Map<String, Object>> segments = castList(route.get("segments"));
+        String firstStop = stopName(timeline, 0);
+        String diningStop = timeline.stream()
+                .filter(stop -> "餐饮".equals(String.valueOf(stop.get("type"))))
+                .map(stop -> stopName(stop))
+                .filter(name -> !name.isBlank())
+                .findFirst()
+                .orElse(stopName(timeline, Math.min(1, timeline.size() - 1)));
+        String lastStop = stopName(timeline, timeline.size() - 1);
+        String routeShape = routeShape(firstStop, diningStop, lastStop);
+        double distanceKm = doubleValue(route.get("distanceKm"));
+        int travelMinutes = intValue(route.get("travelMinutes")) == null ? 0 : intValue(route.get("travelMinutes"));
+        int totalMinutes = intValue(option.get("totalMinutes")) == null ? 0 : intValue(option.get("totalMinutes"));
+        int budget = intValue(option.get("budgetEstimate")) == null ? 0 : intValue(option.get("budgetEstimate"));
+        String scenario = String.valueOf(intent.getOrDefault("scenario", ""));
+        boolean family = "family".equals(scenario) || timeline.toString().contains("亲子") || timeline.toString().contains("孩子");
+        boolean couple = "couple".equals(scenario);
+        boolean friends = "friends".equals(scenario) || timeline.toString().contains("朋友");
+        boolean lowCalorie = timeline.toString().contains("轻食") || timeline.toString().contains("低卡") || timeline.toString().contains("健康");
+        boolean indoor = timeline.stream().anyMatch(stop -> Boolean.TRUE.equals(stop.get("indoor")));
+
+        option.put("name", cardName(routeShape, firstStop, diningStop, distanceKm, totalMinutes, budget, family, couple, friends, lowCalorie, rank));
+        option.put("tagline", cardTagline(routeShape, segments, distanceKm, travelMinutes, totalMinutes, budget, family, couple, friends, lowCalorie));
+        option.put("tag", cardTag(family, couple, friends, lowCalorie, indoor, distanceKm, travelMinutes));
+        option.put("routeSummary", routeSummary(routeShape, segments, distanceKm, travelMinutes, totalMinutes, budget));
+        option.put("routeHighlights", routeHighlights(timeline, segments, distanceKm, travelMinutes));
+        option.put("fitReasons", fitReasons(timeline, segments, intent, distanceKm, travelMinutes, totalMinutes, budget, family, lowCalorie));
+        option.put("riskNotes", riskNotes(option, segments));
+    }
+
+    private String cardName(String routeShape, String firstStop, String diningStop, double distanceKm,
+                            int totalMinutes, int budget, boolean family, boolean couple, boolean friends,
+                            boolean lowCalorie, int rank) {
+        if (family && lowCalorie) {
+            return "亲子轻食顺路局";
+        }
+        if (family) {
+            return shortName(firstStop) + "亲子慢玩线";
+        }
+        if (couple && distanceKm <= 4.0) {
+            return shortName(firstStop) + "微醺散步线";
+        }
+        if (friends && diningStop.contains("烤")) {
+            return "先玩后烤肉小聚线";
+        }
+        if (friends) {
+            return shortName(firstStop) + "朋友碰头线";
+        }
+        if (lowCalorie) {
+            return "轻负担逛吃线";
+        }
+        if (totalMinutes > 0 && totalMinutes <= 210 && distanceKm <= 5.0) {
+            return "三小时近场收口线";
+        }
+        if (budget > 0 && budget <= 300) {
+            return "省预算顺路逛吃线";
+        }
+        if (!routeShape.isBlank()) {
+            return shortName(routeShape) + "顺游线";
+        }
+        return "本地短途精选线 " + rank;
+    }
+
+    private String cardTagline(String routeShape, List<Map<String, Object>> segments, double distanceKm,
+                               int travelMinutes, int totalMinutes, int budget, boolean family, boolean couple,
+                               boolean friends, boolean lowCalorie) {
+        List<String> parts = new ArrayList<>();
+        if (!routeShape.isBlank()) {
+            parts.add(routeShape + "一路接上");
+        }
+        if (distanceKm > 0 && travelMinutes > 0) {
+            parts.add(formatDistance(distanceKm) + "路程压在" + travelMinutes + "分钟左右");
+        }
+        if (budget > 0) {
+            parts.add("预算约" + budget + "元");
+        }
+        if (family) {
+            parts.add("给孩子留了停留时间");
+        } else if (couple) {
+            parts.add("节奏不赶，适合边走边聊");
+        } else if (friends) {
+            parts.add("碰头、玩乐、吃饭都好解释");
+        } else if (lowCalorie) {
+            parts.add("吃饭负担更轻");
+        }
+        if (segments.size() >= 3) {
+            parts.add("点位多但不绕");
+        }
+        return String.join("，", parts);
+    }
+
+    private String cardTag(boolean family, boolean couple, boolean friends, boolean lowCalorie,
+                           boolean indoor, double distanceKm, int travelMinutes) {
+        if (family) return "亲子友好";
+        if (lowCalorie) return "轻食友好";
+        if (distanceKm > 0 && distanceKm <= 3.0) return "近场顺路";
+        if (travelMinutes > 0 && travelMinutes <= 25) return "少折腾";
+        if (indoor) return "室内稳妥";
+        if (couple) return "约会氛围";
+        if (friends) return "朋友小聚";
+        return "路线顺路";
+    }
+
+    private String routeSummary(String routeShape, List<Map<String, Object>> segments, double distanceKm,
+                                int travelMinutes, int totalMinutes, int budget) {
+        StringBuilder text = new StringBuilder();
+        if (!routeShape.isBlank()) {
+            text.append(routeShape).append("，按地图顺序走");
+        } else {
+            text.append("已按地图路线重排点位");
+        }
+        if (distanceKm > 0 || travelMinutes > 0) {
+            text.append("；");
+            if (distanceKm > 0) text.append("全程约").append(formatDistance(distanceKm));
+            if (distanceKm > 0 && travelMinutes > 0) text.append("，");
+            if (travelMinutes > 0) text.append("交通约").append(travelMinutes).append("分钟");
+        }
+        if (totalMinutes > 0) {
+            text.append("，整体约").append(formatHoursText(totalMinutes));
+        }
+        if (budget > 0) {
+            text.append("，预算约").append(budget).append("元");
+        }
+        if (!segments.isEmpty()) {
+            Map<String, Object> longest = segments.stream()
+                    .max(Comparator.comparingDouble(segment -> doubleValue(segment.get("distanceKm"))))
+                    .orElse(Map.of());
+            if (!longest.isEmpty()) {
+                text.append("。最长一段是")
+                        .append(shortName(String.valueOf(longest.getOrDefault("from", ""))))
+                        .append("到")
+                        .append(shortName(String.valueOf(longest.getOrDefault("to", ""))))
+                        .append("，约")
+                        .append(formatDistance(doubleValue(longest.get("distanceKm"))))
+                        .append("。");
+            }
+        }
+        return text.toString();
+    }
+
+    private List<String> routeHighlights(List<Map<String, Object>> timeline, List<Map<String, Object>> segments,
+                                         double distanceKm, int travelMinutes) {
+        List<String> highlights = new ArrayList<>();
+        if (!segments.isEmpty()) {
+            highlights.add("路线顺序：" + segments.stream()
+                    .map(segment -> shortName(String.valueOf(segment.getOrDefault("to", ""))))
+                    .filter(name -> !name.isBlank() && !"出发地".equals(name))
+                    .distinct()
+                    .reduce((a, b) -> a + " → " + b)
+                    .orElse(compactNames(timeline)));
+        } else {
+            highlights.add("路线顺序：" + compactNames(timeline));
+        }
+        if (distanceKm > 0 && travelMinutes > 0) {
+            highlights.add("地图估算：" + formatDistance(distanceKm) + "，交通约" + travelMinutes + "分钟");
+        }
+        String dining = timeline.stream()
+                .filter(stop -> "餐饮".equals(String.valueOf(stop.get("type"))))
+                .map(this::stopName)
+                .findFirst()
+                .orElse("");
+        if (!dining.isBlank()) {
+            highlights.add(shortName(dining) + "放在中后段，玩完再吃饭更顺。");
+        }
+        return highlights;
+    }
+
+    private List<String> fitReasons(List<Map<String, Object>> timeline, List<Map<String, Object>> segments,
+                                    Map<String, Object> intent, double distanceKm, int travelMinutes,
+                                    int totalMinutes, int budget, boolean family, boolean lowCalorie) {
+        List<String> reasons = new ArrayList<>();
+        reasons.add(routeSummary(routeShape(stopName(timeline, 0),
+                timeline.stream().filter(stop -> "餐饮".equals(String.valueOf(stop.get("type")))).map(this::stopName).findFirst().orElse(""),
+                stopName(timeline, timeline.size() - 1)), segments, distanceKm, travelMinutes, totalMinutes, budget));
+        if (family) {
+            reasons.add("亲子点位和吃饭点没有拆得太散，孩子中途累了也容易压缩最后一站。");
+        } else if (lowCalorie) {
+            reasons.add("餐饮选择偏轻负担，适合把主要精力留给活动，不用为吃饭绕远。");
+        } else {
+            reasons.add("活动、餐饮、补充点按地图动线串起来，同行人看卡片就能理解怎么走。");
+        }
+        if (!segments.isEmpty()) {
+            reasons.add("每段路线都来自右侧地图同一份规划数据，点位和顺序保持一致。");
+        }
+        return reasons;
+    }
+
+    private List<String> riskNotes(Map<String, Object> option, List<Map<String, Object>> segments) {
+        List<String> notes = new ArrayList<>(castStringList(option.get("riskNotes")));
+        if (notes.isEmpty()) {
+            notes.add("商家营业、排队和票务状态出发前还需要再确认一次。");
+        }
+        if (segments.stream().anyMatch(segment -> "driving".equals(String.valueOf(segment.get("routeMode"))))) {
+            notes.add("含打车或驾车路段，高峰期建议预留一点缓冲。");
+        }
+        return notes;
+    }
+
+    private String routeShape(String firstStop, String diningStop, String lastStop) {
+        List<String> names = new ArrayList<>();
+        if (firstStop != null && !firstStop.isBlank()) names.add(shortName(firstStop));
+        if (diningStop != null && !diningStop.isBlank() && names.stream().noneMatch(diningStop::contains)) {
+            names.add(shortName(diningStop));
+        }
+        if (lastStop != null && !lastStop.isBlank() && names.stream().noneMatch(lastStop::contains)) {
+            names.add(shortName(lastStop));
+        }
+        return String.join(" → ", names);
+    }
+
+    private String compactNames(List<Map<String, Object>> timeline) {
+        return timeline.stream()
+                .map(this::stopName)
+                .filter(name -> !name.isBlank())
+                .map(this::shortName)
+                .distinct()
+                .reduce((a, b) -> a + " → " + b)
+                .orElse("");
+    }
+
+    private String stopName(List<Map<String, Object>> timeline, int index) {
+        if (timeline.isEmpty() || index < 0 || index >= timeline.size()) {
+            return "";
+        }
+        return stopName(timeline.get(index));
+    }
+
+    private String stopName(Map<String, Object> stop) {
+        return String.valueOf(stop.getOrDefault("name", "")).trim();
+    }
+
+    private String shortName(String name) {
+        String raw = name == null ? "" : name.trim();
+        if (raw.isBlank() || "null".equals(raw)) {
+            return "";
+        }
+        String base = raw.replaceAll("（[^）]+）|\\([^)]+\\)$", "")
+                .replaceAll("(旗舰店|体验店|官方店|专门店|主题店){2,}", "$1");
+        if (base.length() > 10) {
+            base = base.replaceAll("(餐厅|饭店|美食|小吃|料理|烤肉|烧烤|火锅|咖啡|影院|影城|公园|广场|乐园|书店|商场|中心).*$", "$1");
+        }
+        return base.length() > 12 ? base.substring(0, 12) : base;
+    }
+
+    private String formatDistance(double distanceKm) {
+        if (distanceKm <= 0) {
+            return "距离待估";
+        }
+        if (distanceKm < 1.0) {
+            return Math.round(distanceKm * 1000) + "m";
+        }
+        return (Math.round(distanceKm * 10.0) / 10.0) + "km";
+    }
+
+    private String formatHoursText(int minutes) {
+        if (minutes <= 0) {
+            return "时长待估";
+        }
+        if (minutes < 60) {
+            return minutes + "分钟";
+        }
+        double hours = Math.round(minutes / 6.0) / 10.0;
+        return hours + "小时";
+    }
+
+    private double doubleValue(Object value) {
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+        try {
+            return Double.parseDouble(String.valueOf(value));
+        } catch (Exception e) {
+            return 0.0;
+        }
     }
 
     private int groupTotal(Map<String, Object> intent) {

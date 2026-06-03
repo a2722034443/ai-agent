@@ -85,16 +85,32 @@ public class AmapRouteEstimateTool {
             int totalSeconds = 0;
             double distanceKm = 0.0;
             List<Integer> segmentMinutes = new ArrayList<>();
+            List<Double> segmentDistancesKm = new ArrayList<>();
             List<String> routeModes = new ArrayList<>();
-            for (CompletableFuture<Map<String, Object>> f : futures) {
-                Map<String, Object> segment = f.getNow(Map.of());
+            List<Map<String, Object>> routeSegments = new ArrayList<>();
+            for (int i = 0; i < futures.size(); i++) {
+                Poi from = stops.get(i);
+                Poi to = stops.get(i + 1);
+                Map<String, Object> segment = futures.get(i).getNow(Map.of());
                 int seconds = ((Number) segment.getOrDefault("durationSeconds", 0)).intValue();
+                int meters = ((Number) segment.getOrDefault("distanceMeters", 0)).intValue();
+                String mode = String.valueOf(segment.getOrDefault("routeMode", "unknown"));
                 totalSeconds += seconds;
-                distanceKm += ((Number) segment.getOrDefault("distanceMeters", 0)).doubleValue() / 1000.0;
-                segmentMinutes.add(seconds / 60);
-                routeModes.add(String.valueOf(segment.getOrDefault("routeMode", "unknown")));
+                distanceKm += meters / 1000.0;
+                int minutes = seconds <= 0 ? 0 : Math.max(1, (int) Math.ceil(seconds / 60.0));
+                double segmentKm = Math.round((meters / 1000.0) * 10.0) / 10.0;
+                segmentMinutes.add(minutes);
+                segmentDistancesKm.add(segmentKm);
+                routeModes.add(mode);
+                routeSegments.add(Map.of(
+                        "from", from.getName(),
+                        "to", to.getName(),
+                        "durationMinutes", minutes,
+                        "distanceKm", segmentKm,
+                        "routeMode", mode
+                ));
             }
-            int travelMinutes = totalSeconds / 60;
+            int travelMinutes = totalSeconds <= 0 ? 0 : Math.max(1, (int) Math.ceil(totalSeconds / 60.0));
 
             if (travelMinutes <= 0 || distanceKm <= 0.0) {
                 return blockOrMock(planId, stops, "empty_route", BICYCLING_PATH);
@@ -104,6 +120,8 @@ public class AmapRouteEstimateTool {
             output.put("travelMinutes", travelMinutes);
             output.put("distanceKm", Math.round(distanceKm * 10.0) / 10.0);
             output.put("segmentMinutes", segmentMinutes);
+            output.put("segmentDistancesKm", segmentDistancesKm);
+            output.put("segments", routeSegments);
             output.put("routeModes", routeModes);
             output.put("source", "amap_dynamic_direction");
             traceService.trace(planId, "AmapRouteEstimateTool", "ok", System.currentTimeMillis(),

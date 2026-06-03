@@ -114,8 +114,14 @@ public class ClarificationService {
                     durationSuggestions(message)));
         }
         if (blank(group.get("composition")) || blank(group.get("total"))) {
-            fields.add(field("group", "\u540c\u884c\u4eba", "\u51e0\u4e2a\u4eba\u540c\u884c\uff1f\u6709\u6ca1\u6709\u5b69\u5b50\u3001\u8001\u4eba\u6216\u9700\u8981\u7167\u987e\u7684\u4eba\uff1f",
-                    groupSuggestions(message)));
+            if (isLikelySolo(message)) {
+                group.put("composition", "单人");
+                group.put("total", 1);
+                intent.put("group", group);
+            } else {
+                fields.add(field("group", "\u540c\u884c\u4eba", "\u51e0\u4e2a\u4eba\u540c\u884c\uff1f\u6709\u6ca1\u6709\u5b69\u5b50\u3001\u8001\u4eba\u6216\u9700\u8981\u7167\u987e\u7684\u4eba\uff1f",
+                        groupSuggestions(message)));
+            }
         }
         if (blank(preferences.get("budgetAmount")) && blank(preferences.get("budget"))) {
             fields.add(field("budget", "\u9884\u7b97", "\u603b\u9884\u7b97\u5927\u6982\u662f\u591a\u5c11\uff1f",
@@ -555,6 +561,12 @@ public class ClarificationService {
         String value = string(text);
         return List.of("无", "没有", "没", "0", "零").contains(value)
                 || containsAny(value, "没有同行人", "没人同行", "没有人同行", "无同行人", "就我", "只有我", "自己去");
+    }
+
+    private boolean isLikelySolo(String text) {
+        String value = string(text);
+        return containsAny(value, "我现在在", "只有我", "就我", "我自己", "一个人", "独自")
+                && !containsAny(value, "朋友", "爸妈", "父母", "孩子", "同事", "同学", "老婆", "老公", "对象");
     }
 
     private Integer extractNumber(String text) {

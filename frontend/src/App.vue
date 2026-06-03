@@ -140,11 +140,11 @@
                 <div class="plan-heading">
                   <span class="plan-rank">方案 {{ plan.rank }}</span>
                   <strong>{{ plan.name }}</strong>
-                  <small>轻松好走，适合一起出发</small>
+                  <small>{{ plan.tagline || '已按地图路线整理点位顺序' }}</small>
                 </div>
                 <span class="plan-tag">{{ plan.tag }}</span>
               </header>
-              <p class="timeline-line">{{ compactTimeline(plan.timeline) }}</p>
+              <p class="timeline-line">{{ compactTimeline(plan) }}</p>
               <div class="plan-meta">
                 <span class="meta-chip money">
                   <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -165,7 +165,7 @@
                     <path d="M5 18c4-8 10-11 14-12-1 4-4 10-12 14l1-5-3 3Z" fill="currentColor" opacity=".18" />
                     <path d="M7 17c2-4 6-8 11-10" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
                   </svg>
-                  距离 {{ plan.route?.distanceKm || '2.1' }}km
+                  距离 {{ formatDistance(plan.route?.distanceKm) }}
                 </span>
               </div>
               <footer>
@@ -203,9 +203,23 @@
             <article class="bubble">
               <time>{{ item.time }}</time>
               <p v-if="item.text">{{ item.text }}</p>
-              <div v-if="item.loading" class="typing">
-                <span></span><span></span><span></span>
-                正在为你规划方案...
+              <div v-if="item.loading" class="planning-progress">
+                <div class="progress-head">
+                  <strong>{{ planningProgress.label }}</strong>
+                  <span>{{ planningProgress.percent }}%</span>
+                </div>
+                <div class="progress-track" aria-label="规划进度">
+                  <i :style="{ width: `${planningProgress.percent}%` }"></i>
+                </div>
+                <ol>
+                  <li
+                    v-for="step in planningSteps"
+                    :key="step.key"
+                    :class="step.status"
+                  >
+                    <b>{{ step.index }}</b>{{ step.label }}
+                  </li>
+                </ol>
               </div>
               <div v-if="item.clarification?.fields?.length" class="clarify-card">
                 <header class="clarify-head">
@@ -410,6 +424,8 @@ const voiceBaseText = ref('')
 const voiceCommittedText = ref('')
 const voiceInterimText = ref('')
 const recordingTimer = ref(null)
+const planningProgressPercent = ref(0)
+const planningProgressTimer = ref(null)
 const activeView = ref('chat')
 const currentStep = ref('need')
 const messages = ref([])
@@ -442,6 +458,28 @@ const memoryTags = ref(['老婆减肥', '孩子要亲子设施', '朋友不吃�
 const hasFinalPlans = computed(() => shownPlans.value.length > 0)
 const showPlanWorkspace = computed(() => activeView.value === 'chat' && hasFinalPlans.value && currentStep.value === 'plans')
 const showComposer = computed(() => activeView.value !== 'chat' || currentStep.value !== 'plans' || !hasFinalPlans.value)
+const planningProgress = computed(() => {
+  const percent = planningProgressPercent.value
+  const label = percent < 18
+    ? '正在理解你的时间、地点和同行约束'
+    : percent < 38
+      ? '正在拆解活动、餐饮和补充点位'
+      : percent < 62
+        ? '正在查询真实地点并过滤不可用结果'
+        : percent < 82
+          ? '正在计算顺路动线和分段路程'
+          : '正在整理方案卡片和风险提醒'
+  return { percent, label }
+})
+const planningSteps = computed(() => {
+  const percent = planningProgressPercent.value
+  return [
+    { key: 'intent', index: 1, label: '识别约束', status: percent >= 18 ? 'done' : 'doing' },
+    { key: 'poi', index: 2, label: '查找地点', status: percent >= 45 ? 'done' : percent >= 18 ? 'doing' : 'pending' },
+    { key: 'route', index: 3, label: '计算路线', status: percent >= 72 ? 'done' : percent >= 45 ? 'doing' : 'pending' },
+    { key: 'cards', index: 4, label: '生成卡片', status: percent >= 92 ? 'done' : percent >= 72 ? 'doing' : 'pending' }
+  ]
+})
 const themeHero = computed(() => {
   return {
     badge: 'Animal-inspired Demo',
@@ -516,6 +554,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', handleWindowKeydown)
+  stopPlanningProgress()
 })
 
 function handleWindowKeydown(event) {
@@ -585,10 +624,29 @@ function useSample(text) {
   plan()
 }
 
+function startPlanningProgress() {
+  stopPlanningProgress()
+  planningProgressPercent.value = 8
+  planningProgressTimer.value = window.setInterval(() => {
+    const current = planningProgressPercent.value
+    const step = current < 30 ? 5 : current < 65 ? 3 : current < 88 ? 2 : 1
+    planningProgressPercent.value = Math.min(96, current + step)
+  }, 900)
+}
+
+function stopPlanningProgress() {
+  if (planningProgressTimer.value) {
+    window.clearInterval(planningProgressTimer.value)
+    planningProgressTimer.value = null
+  }
+  planningProgressPercent.value = 0
+}
+
 async function plan() {
   const text = message.value.trim()
   if (!text || loading.value) return
   loading.value = true
+  startPlanningProgress()
   activeView.value = 'chat'
   currentStep.value = 'need'
   shownPlans.value = []
@@ -639,6 +697,7 @@ async function plan() {
     await loadThreads()
   } finally {
     loading.value = false
+    stopPlanningProgress()
     nextTick(scrollToBottom)
   }
 }
@@ -646,6 +705,7 @@ async function plan() {
 async function submitClarification() {
   if (loading.value) return
   loading.value = true
+  startPlanningProgress()
   let loadingId = ''
   try {
     const answers = await buildClarificationAnswers()
@@ -706,6 +766,7 @@ async function submitClarification() {
     await loadThreads()
   } finally {
     loading.value = false
+    stopPlanningProgress()
     nextTick(scrollToBottom)
   }
 }
@@ -815,6 +876,7 @@ function clarificationPresets(item) {
   const text = latestUserText()
   const scenario = inferPresetScenario(text)
   const presets = presetTemplates(scenario)
+  const seen = new Set()
   return presets.map(preset => {
     const values = normalizePresetValues(preset.values)
     return {
@@ -823,6 +885,11 @@ function clarificationPresets(item) {
       fieldKeys: fields.map(field => field.key),
       summary: presetSummary(values, fields)
     }
+  }).filter(preset => {
+    const key = preset.summary || JSON.stringify(preset.values)
+    if (!key || seen.has(key)) return false
+    seen.add(key)
+    return true
   })
 }
 
@@ -1009,12 +1076,35 @@ function fieldLabel(key) {
 }
 
 function normalizePlans(options) {
-  return options.map((option, index) => ({
-    ...option,
-    rank: option.rank || index + 1,
-    name: option.name || `方案 ${index + 1}`,
-    tag: tagFor(option, index)
-  }))
+  return options.map((option, index) => {
+    const route = normalizeRoute(option.route || {})
+    return {
+      ...option,
+      route,
+      rank: option.rank || index + 1,
+      name: option.name || fallbackPlanName(option, index),
+      tagline: option.tagline || fallbackTagline(option, route),
+      tag: option.tag || tagFor(option, index),
+      routeSummary: option.routeSummary || fallbackRouteSummary(option, route),
+      routeHighlights: Array.isArray(option.routeHighlights) ? option.routeHighlights : []
+    }
+  })
+}
+
+function normalizeRoute(route) {
+  const segments = Array.isArray(route.segments) ? route.segments : []
+  const segmentMinutes = Array.isArray(route.segmentMinutes)
+    ? route.segmentMinutes.map(value => Number(value) || 0)
+    : segments.map(segment => Number(segment.durationMinutes) || 0)
+  const segmentDistancesKm = Array.isArray(route.segmentDistancesKm)
+    ? route.segmentDistancesKm.map(value => Number(value) || 0)
+    : segments.map(segment => Number(segment.distanceKm) || 0)
+  return {
+    ...route,
+    segmentMinutes,
+    segmentDistancesKm,
+    segments
+  }
 }
 
 function tagFor(option, index) {
@@ -1024,12 +1114,12 @@ function tagFor(option, index) {
   return ['路线顺路', '预算友好', '少折腾'][index] || '省心'
 }
 
-function compactTimeline(timeline = []) {
-  if (!timeline.length) return '14:00 出发 → 15:00 周边活动 → 18:00 晚餐'
-  return timeline.slice(0, 4).map((stop, index) => {
-    if (index === 0) return `${stop.time || '现在'} 出发`
-    return `${stop.time || ''} ${simplifyPoiName(stop.name)}`.trim()
-  }).join(' → ')
+function compactTimeline(plan = {}) {
+  const timeline = Array.isArray(plan.timeline) ? plan.timeline : []
+  if (!timeline.length) return '等待地图点位'
+  const departure = plan.route?.departureTime || ''
+  const items = timeline.slice(0, 4).map(stop => `${stop.time || ''} ${simplifyPoiName(stop.name)}`.trim())
+  return departure ? `${departure} 出发 → ${items.join(' → ')}` : items.join(' → ')
 }
 
 function simplifyPoiName(name) {
@@ -1048,23 +1138,47 @@ function simplifyPoiName(name) {
 }
 
 function planAdvantages(plan) {
-  const timeline = Array.isArray(plan?.timeline) ? plan.timeline : []
-  const hasDining = timeline.some(stop => stop.type === '餐饮')
-  const activityNames = timeline.filter(stop => stop.type !== '餐饮').map(stop => simplifyPoiName(stop.name)).filter(Boolean)
-  const route = plan?.route || {}
-  const distance = route.distanceKm ? `全程约 ${route.distanceKm}km` : '路线距离已控制'
-  const minutes = route.travelMinutes ? `路上约 ${route.travelMinutes} 分钟` : '路程耗时较短'
-  const firstActivity = activityNames[0] || '核心活动'
   return [
-    `${firstActivity} 和${hasDining ? '餐饮' : '休息点'}顺路安排，减少来回折返。`,
-    `${distance}，${minutes}，适合本地短时出行。`,
-    `预算和节奏更稳，适合直接选中后分享给同行人确认。`
-  ]
+    plan.routeSummary,
+    ...(Array.isArray(plan.routeHighlights) ? plan.routeHighlights : []),
+    ...(Array.isArray(plan.fitReasons) ? plan.fitReasons : [])
+  ].filter(Boolean).filter((item, index, arr) => arr.indexOf(item) === index).slice(0, 5)
+}
+
+function fallbackPlanName(option, index) {
+  const timeline = Array.isArray(option?.timeline) ? option.timeline : []
+  const first = simplifyPoiName(timeline[0]?.name || '')
+  const dining = simplifyPoiName(timeline.find(stop => stop.type === '餐饮')?.name || '')
+  if (first && dining) return `${first}到${dining}顺游线`
+  if (first) return `${first}周边短线`
+  return `方案 ${index + 1}`
+}
+
+function fallbackTagline(option, route) {
+  const timeline = Array.isArray(option?.timeline) ? option.timeline : []
+  const names = timeline.slice(0, 3).map(stop => simplifyPoiName(stop.name)).filter(Boolean).join(' → ')
+  const stats = [formatDistance(route.distanceKm), route.travelMinutes ? `交通约${route.travelMinutes}分钟` : '交通待估'].join('，')
+  return names ? `${names}，${stats}` : stats
+}
+
+function fallbackRouteSummary(option, route) {
+  const timeline = Array.isArray(option?.timeline) ? option.timeline : []
+  const names = timeline.map(stop => simplifyPoiName(stop.name)).filter(Boolean).join(' → ')
+  const total = option?.totalMinutes ? `，整体约${formatHours(option.totalMinutes)}` : ''
+  const travel = route.travelMinutes ? `交通约${route.travelMinutes}分钟` : '交通待估'
+  return `${names || '点位已生成'}；地图估算${formatDistance(route.distanceKm)}，${travel}${total}。`
 }
 
 function formatHours(minutes) {
   if (!minutes) return '约 3 小时'
   return `${Math.round(minutes / 6) / 10} 小时`
+}
+
+function formatDistance(value) {
+  const distance = Number(value)
+  if (!Number.isFinite(distance) || distance <= 0) return '待估'
+  if (distance < 1) return `${Math.round(distance * 1000)}m`
+  return `${Math.round(distance * 10) / 10}km`
 }
 
 function formatMoney(value) {
@@ -1359,7 +1473,7 @@ function scrollToBottom() {
 
 function friendlyError(err) {
   if (err?.name === 'RequestTimeoutError' || String(err?.message || '').startsWith('REQUEST_TIMEOUT:')) {
-    return '抱歉，这次规划等待超时了。前端已等待较长时间，通常是 LLM 或真实地点服务响应过慢。你可以稍后重试，或先缩短需求描述再试一次。'
+    return '抱歉，这次规划等待超时了。通常是真实地点、路线服务或网络响应变慢；你的需求已经保留，可以直接再试一次，我会继续按原约束规划。'
   }
   if (err?.payload?.status === 'BLOCKED') {
     const providerLabel = providerName(err?.payload?.provider)
@@ -2246,6 +2360,83 @@ input {
 
 .typing span:nth-child(2) { animation-delay: .16s; }
 .typing span:nth-child(3) { animation-delay: .32s; }
+
+.planning-progress {
+  display: grid;
+  gap: .75rem;
+  min-width: min(28rem, 100%);
+  margin-top: .45rem;
+}
+
+.progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: #7a5b47;
+  font-size: .92rem;
+}
+
+.progress-head strong {
+  color: var(--ink-strong);
+  font-size: .96rem;
+}
+
+.progress-track {
+  height: .72rem;
+  border: 2px solid var(--ink-strong);
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255,255,255,.72);
+}
+
+.progress-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #55b485, #ffd166, #ff9368);
+  transition: width .35s ease;
+}
+
+.planning-progress ol {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: .45rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.planning-progress li {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+  min-width: 0;
+  color: #9a7864;
+  font-size: .78rem;
+  font-weight: 800;
+}
+
+.planning-progress li b {
+  display: grid;
+  place-items: center;
+  flex: 0 0 1.35rem;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  background: rgba(255,255,255,.7);
+  border: 1px solid rgba(86,51,33,.18);
+  color: inherit;
+  font-size: .72rem;
+}
+
+.planning-progress li.done {
+  color: #2c8a65;
+}
+
+.planning-progress li.doing {
+  color: #c46b38;
+}
 
 .clarify-card {
   display: grid;

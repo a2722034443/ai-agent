@@ -41,9 +41,14 @@ public class MockTools {
         int totalSeconds = 0;
         double distance = 0.0;
         List<Integer> segmentMinutes = new ArrayList<>();
+        List<Double> segmentDistancesKm = new ArrayList<>();
+        List<Map<String, Object>> segments = new ArrayList<>();
         List<String> routeModes = new ArrayList<>();
         for (int i = 1; i < stops.size(); i++) {
-            double segment = distanceKm(stops.get(i - 1), stops.get(i));
+            Poi from = stops.get(i - 1);
+            Poi to = stops.get(i);
+            double segment = distanceKm(from, to);
+            double roundedSegment = Math.round(segment * 10.0) / 10.0;
             distance += segment;
             String mode = routeMode(segment);
             int secondsPerKm = switch (mode) {
@@ -53,14 +58,25 @@ public class MockTools {
             };
             int segSeconds = Math.max(60, (int) Math.round(segment * secondsPerKm));
             totalSeconds += segSeconds;
-            segmentMinutes.add(segSeconds / 60);
+            int minutes = Math.max(1, (int) Math.ceil(segSeconds / 60.0));
+            segmentMinutes.add(minutes);
+            segmentDistancesKm.add(roundedSegment);
             routeModes.add(mode);
+            segments.add(Map.of(
+                    "from", from.getName(),
+                    "to", to.getName(),
+                    "durationMinutes", minutes,
+                    "distanceKm", roundedSegment,
+                    "routeMode", mode
+            ));
         }
-        int travel = totalSeconds / 60;
+        int travel = totalSeconds <= 0 ? 0 : Math.max(1, (int) Math.ceil(totalSeconds / 60.0));
         Map<String, Object> output = new LinkedHashMap<>();
         output.put("travelMinutes", travel);
         output.put("distanceKm", Math.round(distance * 10.0) / 10.0);
         output.put("segmentMinutes", segmentMinutes);
+        output.put("segmentDistancesKm", segmentDistancesKm);
+        output.put("segments", segments);
         output.put("routeModes", routeModes);
         output.put("source", "mock_dynamic_route_estimate");
         output.putAll(traceService.externalMeta("mock", "mock", "local-distance", "ok"));
@@ -153,8 +169,9 @@ public class MockTools {
     public List<Poi> sortCandidates(List<Poi> pois, Map<String, Object> intent) {
         boolean family = "family".equals(intent.get("scenario"));
         boolean lowCal = ((List<?>) intent.getOrDefault("hard_constraints", List.of())).contains("低卡优先");
+        List<String> explicitTerms = explicitPoiTerms(intent);
         return pois.stream()
-                .sorted(Comparator.comparing((Poi poi) -> scorePoi(poi, family, lowCal)).reversed())
+                .sorted(Comparator.comparing((Poi poi) -> scorePoi(poi, family, lowCal, explicitTerms)).reversed())
                 .toList();
     }
 
@@ -166,12 +183,60 @@ public class MockTools {
         return LocalTime.of(14, 0).plusMinutes(index * 95L).toString();
     }
 
-    private int scorePoi(Poi poi, boolean family, boolean lowCal) {
+    private int scorePoi(Poi poi, boolean family, boolean lowCal, List<String> explicitTerms) {
         int score = (int) Math.round(poi.getRating() * 20);
+        String poiText = (poi.getName() + " " + poi.getAddress()).toLowerCase();
+        for (String term : explicitTerms) {
+            String normalized = term.toLowerCase();
+            if (poiText.contains(normalized) || normalized.contains(poi.getName().toLowerCase())) {
+                score += 45;
+                break;
+            }
+            if (overlapScore(poiText, normalized) >= Math.min(4, normalized.length())) {
+                score += 18;
+            }
+        }
         if (family && poi.isKidFriendly()) score += 25;
         if (!family && poi.isSocial()) score += 20;
         if (lowCal && poi.isLowCalorie()) score += 30;
         if (poi.isSeatProblem() || poi.isTicketProblem()) score -= 8;
+        return score;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<String> explicitPoiTerms(Map<String, Object> intent) {
+        Map<String, Object> strategy = intent.get("poiSearchStrategy") instanceof Map<?, ?>
+                ? (Map<String, Object>) intent.get("poiSearchStrategy")
+                : Map.of();
+        List<String> terms = new ArrayList<>();
+        for (String key : List.of("activityKeywords", "diningKeywords", "extraKeywords")) {
+            Object raw = strategy.get(key);
+            if (!(raw instanceof List<?> list)) {
+                continue;
+            }
+            for (Object item : list) {
+                String text = String.valueOf(item).trim();
+                if (text.length() >= 4 && !isGenericKeyword(text) && !terms.contains(text)) {
+                    terms.add(text);
+                }
+            }
+        }
+        return terms;
+    }
+
+    private boolean isGenericKeyword(String text) {
+        return List.of("室内", "商场", "展览", "文化", "公园", "娱乐", "餐厅", "简餐", "咖啡", "书店", "海鲜", "杭帮菜", "北京烤鸭")
+                .contains(text);
+    }
+
+    private int overlapScore(String poiText, String term) {
+        int score = 0;
+        for (int i = 0; i < term.length(); i++) {
+            char ch = term.charAt(i);
+            if (!Character.isWhitespace(ch) && poiText.indexOf(ch) >= 0) {
+                score++;
+            }
+        }
         return score;
     }
 
