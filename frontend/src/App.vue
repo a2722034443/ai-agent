@@ -283,8 +283,10 @@ const voiceTranscribing = ref(false)
 const voiceError = ref('')
 const mediaStream = ref(null)
 const audioContextRef = ref(null)
+const audioSource = ref(null)
 const audioProcessor = ref(null)
 const speechSocket = ref(null)
+const voiceSessionId = ref(0)
 const voiceBaseText = ref('')
 const voiceCommittedText = ref('')
 const voiceInterimText = ref('')
@@ -919,6 +921,8 @@ async function startVoiceRecording() {
   }
   try {
     await ensureSession()
+    const sessionId = voiceSessionId.value + 1
+    voiceSessionId.value = sessionId
     voiceBaseText.value = message.value
     voiceCommittedText.value = ''
     voiceInterimText.value = ''
@@ -929,6 +933,7 @@ async function startVoiceRecording() {
     const socket = new WebSocket(speechStreamUrl())
     socket.binaryType = 'arraybuffer'
     socket.onmessage = event => {
+      if (sessionId !== voiceSessionId.value || !voiceRecording.value) return
       const payload = JSON.parse(event.data)
       if (payload.type === 'status' && payload.status === 'ready') {
         voiceError.value = ''
@@ -941,6 +946,7 @@ async function startVoiceRecording() {
       handleSpeechStreamMessage(payload)
     }
     socket.onclose = () => {
+      if (sessionId !== voiceSessionId.value) return
       voiceTranscribing.value = false
       speechSocket.value = null
     }
@@ -949,7 +955,7 @@ async function startVoiceRecording() {
       socket.onerror = reject
     })
     speechSocket.value = socket
-    await startPcmStreaming(stream, socket)
+    await startPcmStreaming(stream, socket, sessionId)
     recordingTimer.value = window.setTimeout(() => stopVoiceRecording(), 30000)
   } catch (err) {
     voiceError.value = err?.name === 'NotAllowedError' ? '麦克风权限被拒绝' : '无法启动录音'
@@ -958,19 +964,29 @@ async function startVoiceRecording() {
 }
 
 function stopVoiceRecording() {
+  voiceSessionId.value += 1
   if (recordingTimer.value) {
     window.clearTimeout(recordingTimer.value)
     recordingTimer.value = null
   }
   stopPcmStreaming()
-  if (speechSocket.value?.readyState === WebSocket.OPEN) {
-    speechSocket.value.send(JSON.stringify({ type: 'end' }))
-  } else {
-    speechSocket.value?.close()
+  const socket = speechSocket.value
+  speechSocket.value = null
+  if (socket) {
+    socket.onmessage = null
+    socket.onclose = null
+    socket.onerror = null
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: 'end' }))
+      socket.close()
+    } else {
+      socket.close()
+    }
   }
   mediaStream.value?.getTracks().forEach(track => track.stop())
   mediaStream.value = null
   voiceRecording.value = false
+  voiceTranscribing.value = false
 }
 
 function handleSpeechStreamMessage(payload) {
@@ -999,7 +1015,7 @@ function appendSpeechText(existing, next) {
   return existing + next
 }
 
-async function startPcmStreaming(stream, socket) {
+async function startPcmStreaming(stream, socket, sessionId) {
   const samplesPerPacket = 1600
   const audioContext = new AudioContext()
   await audioContext.resume?.()
@@ -1007,6 +1023,7 @@ async function startPcmStreaming(stream, socket) {
   const processor = audioContext.createScriptProcessor(1024, 1, 1)
   let pendingSamples = new Int16Array(0)
   processor.onaudioprocess = event => {
+    if (sessionId !== voiceSessionId.value || !voiceRecording.value) return
     if (socket.readyState !== WebSocket.OPEN) return
     const input = event.inputBuffer.getChannelData(0)
     pendingSamples = concatPcm(pendingSamples, floatTo16kPcm(input, audioContext.sampleRate))
@@ -1017,13 +1034,19 @@ async function startPcmStreaming(stream, socket) {
   }
   source.connect(processor)
   processor.connect(audioContext.destination)
+  audioSource.value = source
   audioContextRef.value = audioContext
   audioProcessor.value = processor
 }
 
 function stopPcmStreaming() {
-  audioProcessor.value?.disconnect()
+  if (audioProcessor.value) {
+    audioProcessor.value.onaudioprocess = null
+    audioProcessor.value.disconnect()
+  }
   audioProcessor.value = null
+  audioSource.value?.disconnect()
+  audioSource.value = null
   audioContextRef.value?.close?.()
   audioContextRef.value = null
 }
