@@ -182,7 +182,7 @@ public class PlanningService {
                     turnType == PlanTurnType.CLARIFICATION
                             ? "信息补齐了，已生成 3 套方案，下面展开查看地图和路线。"
                             : "方案已生成，下面展开查看地图和路线。",
-                    planResultPayload(session.getId(), intent, result, Map.of(), "chat", "plans"));
+                    planResultPayload(session.getId(), intent, result, Map.of(), "chat", "plans", null));
             log.info("planning.success threadId={} planId={} optionCount={} warnings={}",
                     thread.getId(), session.getId(), options.size(), warnings.size());
             return toResponse(session.getId(), assistant.getId());
@@ -355,7 +355,7 @@ public class PlanningService {
         ChatMessage assistant = historyService.appendAssistant(thread.getId(), session.getId(), session.getParentPlanSessionId(),
                 ChatMessageKind.ASSISTANT_PLAN_RESULT,
                 "已确认执行，门票、订座和分享消息都已安排。",
-                confirmPayload(session, execution));
+                confirmPayload(session, execution, rank));
         return toResponse(id, assistant.getId());
     }
 
@@ -1129,7 +1129,8 @@ public class PlanningService {
     }
 
     private Map<String, Object> planResultPayload(UUID planId, Map<String, Object> intent, Map<String, Object> result,
-                                                  Map<String, Object> execution, String currentView, String currentStep) {
+                                                  Map<String, Object> execution, String currentView, String currentStep,
+                                                  Integer selectedRank) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("planId", planId);
         payload.put("intent", intent);
@@ -1141,16 +1142,19 @@ public class PlanningService {
         payload.put("currentView", currentView);
         payload.put("currentStep", currentStep);
         payload.put("mapOrigin", fromAny(intent.get("location")));
+        if (selectedRank != null) {
+            payload.put("selectedRank", selectedRank);
+        }
         if (!execution.isEmpty()) {
             payload.put("executionSteps", executionSteps(execution));
         }
         return payload;
     }
 
-    private Map<String, Object> confirmPayload(PlanSession session, Map<String, Object> execution) {
+    private Map<String, Object> confirmPayload(PlanSession session, Map<String, Object> execution, int selectedRank) {
         Map<String, Object> intent = fromJson(session.getIntentJson());
         Map<String, Object> result = fromJson(session.getResultJson());
-        return planResultPayload(session.getId(), intent, result, execution, "execute", "plans");
+        return planResultPayload(session.getId(), intent, result, execution, "collab", "plans", selectedRank);
     }
 
     private List<Map<String, Object>> executionSteps(Map<String, Object> execution) {

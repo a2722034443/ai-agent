@@ -101,23 +101,39 @@
               </div>
             </button>
           </div>
-          <AnimalButton
-            v-if="hasFinalPlans"
-            class="summary-share"
-            type="primary"
-            size="large"
-            @click="createShareLink"
-          >
-            分享给同行人
-          </AnimalButton>
         </div>
 
         <section v-if="hasFinalPlans" v-show="showPlanWorkspace" class="result-workspace">
+          <header class="result-workspace-head">
+            <div class="result-workspace-copy">
+              <strong>{{ confirmedRank ? `方案 ${confirmedRank} 已确认` : '方案地图' }}</strong>
+              <small>{{ confirmedRank ? '已进入协同优先流程，可继续分享或查看执行进度。' : '先看路线和细节，再分享给同行人一起确认。' }}</small>
+            </div>
+            <div class="result-workspace-actions">
+              <AnimalButton
+                v-if="confirmedRank"
+                class="secondary-action"
+                type="default"
+                size="large"
+                @click="activeView = 'execute'"
+              >
+                查看执行进度
+              </AnimalButton>
+              <AnimalButton
+                class="summary-share"
+                type="primary"
+                size="large"
+                @click="createShareLink"
+              >
+                分享给同行人
+              </AnimalButton>
+            </div>
+          </header>
           <aside class="result-plans" aria-label="方案列表">
             <article
               v-for="plan in shownPlans"
               :key="plan.rank"
-              :class="['plan-card', { active: activeMapRank === plan.rank, picked: selectedRank === plan.rank }]"
+              :class="['plan-card', { active: activeMapRank === plan.rank, picked: confirmedRank === plan.rank, locked: isPlanLocked(plan.rank) }]"
               @click="viewPlanOnMap(plan.rank)"
             >
               <header>
@@ -154,7 +170,15 @@
               </div>
               <footer>
                 <AnimalButton type="default" size="middle" @click.stop="expandedRank = expandedRank === plan.rank ? null : plan.rank">查看详情</AnimalButton>
-                <AnimalButton class="pick-button" type="primary" size="middle" @click.stop="selectPlan(plan.rank)">选这个</AnimalButton>
+                <AnimalButton
+                  class="pick-button"
+                  type="primary"
+                  size="middle"
+                  :disabled="confirmedRank !== null"
+                  @click.stop="selectPlan(plan.rank)"
+                >
+                  {{ planPickLabel(plan.rank) }}
+                </AnimalButton>
               </footer>
               <div v-if="expandedRank === plan.rank" class="plan-detail">
                 <p v-for="reason in planAdvantages(plan)" :key="reason">{{ reason }}</p>
@@ -223,8 +247,16 @@
       <section v-else-if="activeView === 'collab'" class="page-panel scrapbook-panel">
         <header>
           <div>
-            <h1>小明分享的出行方案</h1>
-            <p>大家一起选方案、提意见，AI 会自动调整。</p>
+            <h1>{{ confirmedRank ? `已确认方案 ${confirmedRank}，现在发给同行人` : '小明分享的出行方案' }}</h1>
+            <p>{{ confirmedRank ? '先同步给同行人收意见，执行进度可以随时查看。' : '大家一起选方案、提意见，AI 会自动调整。' }}</p>
+          </div>
+          <div class="panel-header-actions">
+            <AnimalButton v-if="confirmedRank" class="secondary-action" type="default" size="large" @click="activeView = 'execute'">
+              查看执行进度
+            </AnimalButton>
+            <AnimalButton v-if="hasFinalPlans" class="secondary-action" type="default" size="large" @click="goBackToPlanWorkspace">
+              返回方案地图
+            </AnimalButton>
           </div>
         </header>
         <div class="panel-illustration">
@@ -262,6 +294,11 @@
           <div>
             <h1>AI 正在帮你把事做完</h1>
             <p>门票、餐厅和提醒会按顺序推进，你只用准备出发。</p>
+          </div>
+          <div class="panel-header-actions">
+            <AnimalButton v-if="hasFinalPlans" class="secondary-action" type="default" size="large" @click="goBackToPlanWorkspace">
+              返回方案地图
+            </AnimalButton>
           </div>
         </header>
         <ol>
@@ -394,6 +431,7 @@ const completedClarificationAnswers = ref({})
 const selectedClarificationPreset = ref('')
 const expandedRank = ref(null)
 const selectedRank = ref(null)
+const confirmedRank = ref(null)
 const shareId = ref('')
 const votedRank = ref(null)
 const collabComment = ref('')
@@ -530,7 +568,10 @@ function resetConversation() {
   selectedClarificationPreset.value = ''
   expandedRank.value = null
   selectedRank.value = null
+  confirmedRank.value = null
   shareId.value = ''
+  votedRank.value = null
+  collabComment.value = ''
 }
 
 function startNewThread() {
@@ -605,12 +646,13 @@ async function plan() {
 async function submitClarification() {
   if (loading.value) return
   loading.value = true
-  const answers = await buildClarificationAnswers()
-  const summaryText = clarificationSummary(answers, clarification.value?.fields || [])
-  messages.value.push({ id: crypto.randomUUID(), role: 'user', text: summaryText, time: nowText() })
-  const loadingId = crypto.randomUUID()
-  messages.value.push({ id: loadingId, role: 'assistant', loading: true, time: nowText() })
+  let loadingId = ''
   try {
+    const answers = await buildClarificationAnswers()
+    const summaryText = clarificationSummary(answers, clarification.value?.fields || [])
+    messages.value.push({ id: crypto.randomUUID(), role: 'user', text: summaryText, time: nowText() })
+    loadingId = crypto.randomUUID()
+    messages.value.push({ id: loadingId, role: 'assistant', loading: true, time: nowText() })
     await ensureSession()
     console.info('[clarification] submit', {
       threadId: currentThreadId.value || null,
@@ -635,6 +677,8 @@ async function submitClarification() {
     } else if (hasMoreClarification) {
       selectedClarificationPreset.value = ''
       currentStep.value = 'clarify'
+    } else {
+      currentStep.value = 'need'
     }
     replaceLoading(loadingId, {
       role: 'assistant',
@@ -654,7 +698,11 @@ async function submitClarification() {
       status: err?.status || null,
       payload: err?.payload || null
     })
-    replaceLoading(loadingId, { role: 'assistant', text: friendlyError(err), time: nowText() })
+    if (loadingId) {
+      replaceLoading(loadingId, { role: 'assistant', text: friendlyError(err), time: nowText() })
+    } else {
+      messages.value.push({ id: crypto.randomUUID(), role: 'assistant', text: friendlyError(err), time: nowText() })
+    }
     await loadThreads()
   } finally {
     loading.value = false
@@ -669,6 +717,21 @@ function applyPlanResponse(data) {
   syncMapState(data, shownPlans.value)
   clarification.value = shownPlans.value.length ? {} : (data.clarification || {})
   selectedClarificationPreset.value = ''
+  const nextSelectedRank = Number.isFinite(Number(data?.selectedRank)) ? Number(data.selectedRank) : null
+  selectedRank.value = nextSelectedRank
+  confirmedRank.value = nextSelectedRank
+  if (data?.execution && Object.keys(data.execution).length) {
+    executionSteps.value = buildExecutionSteps(data.execution)
+  }
+  if (data?.status === 'COMPLETED') {
+    activeView.value = data?.currentView || 'collab'
+  }
+  if (shownPlans.value.length) {
+    if (nextSelectedRank === null) {
+      selectedRank.value = null
+      confirmedRank.value = null
+    }
+  }
   if (!shownPlans.value.length) {
     completedClarificationAnswers.value = {}
     currentStep.value = clarification.value?.fields?.length ? 'clarify' : 'need'
@@ -695,12 +758,25 @@ async function openThread(threadId) {
     completedClarificationAnswers.value = {}
     selectedClarificationPreset.value = ''
     expandedRank.value = null
-    selectedRank.value = null
-    activeMapRank.value = restored.shownPlans[0]?.rank || 1
+    selectedRank.value = restored.selectedRank
+    confirmedRank.value = restored.selectedRank
+    activeMapRank.value = restored.selectedRank || restored.shownPlans[0]?.rank || 1
     sidebarOpen.value = false
     nextTick(scrollToBottom)
-  } catch {
-    startNewThread()
+  } catch (err) {
+    console.error('[history] openThread failed', {
+      threadId,
+      name: err?.name || 'Error',
+      message: err?.message || '',
+      status: err?.status || null,
+      payload: err?.payload || null
+    })
+    messages.value.push({
+      id: crypto.randomUUID(),
+      role: 'assistant',
+      text: '历史记录打开失败了，当前先保留现场。请重试一次；如果还失败，我继续修这个历史恢复链路。',
+      time: nowText()
+    })
   }
 }
 
@@ -870,6 +946,11 @@ function replaceLoading(id, next) {
 
 function syncMapState(data, plans) {
   mapOrigin.value = data?.intent?.location || {}
+  const preferredRank = Number.isFinite(Number(data?.selectedRank)) ? Number(data.selectedRank) : activeMapRank.value
+  if (plans.some(plan => plan.rank === preferredRank)) {
+    activeMapRank.value = preferredRank
+    return
+  }
   if (!plans.some(plan => plan.rank === activeMapRank.value)) {
     activeMapRank.value = plans[0]?.rank || 1
   }
@@ -877,6 +958,26 @@ function syncMapState(data, plans) {
 
 function viewPlanOnMap(rank) {
   activeMapRank.value = rank
+}
+
+function goBackToPlanWorkspace() {
+  currentStep.value = 'plans'
+  if (confirmedRank.value && shownPlans.value.some(plan => plan.rank === confirmedRank.value)) {
+    activeMapRank.value = confirmedRank.value
+  } else if (!shownPlans.value.some(plan => plan.rank === activeMapRank.value)) {
+    activeMapRank.value = shownPlans.value[0]?.rank || 1
+  }
+  activeView.value = 'chat'
+}
+
+function isPlanLocked(rank) {
+  return confirmedRank.value !== null && confirmedRank.value !== rank
+}
+
+function planPickLabel(rank) {
+  if (confirmedRank.value === rank) return '已确认'
+  if (confirmedRank.value !== null) return '已确认其他方案'
+  return '选这个'
 }
 
 function goToStep(key) {
@@ -977,8 +1078,13 @@ async function selectPlan(rank) {
     try {
       const data = await confirmPlan(currentPlanId.value, rank)
       executionSteps.value = buildExecutionSteps(data.execution)
+      confirmedRank.value = rank
+      await ensureShareLink(rank)
       await loadThreads()
+      activeView.value = 'collab'
+      return
     } catch {
+      confirmedRank.value = null
       executionSteps.value = [
         { name: '餐厅满位，已为你更换同评分低卡餐厅', status: 'done' },
         { name: '门票和配送继续执行', status: 'done' }
@@ -1006,10 +1112,16 @@ async function submitComment() {
 }
 
 async function createShareLink() {
-  if (!currentPlanId.value) return
-  const data = await createShare({ planId: currentPlanId.value, selectedRank: selectedRank.value || 1 }).catch(() => null)
-  shareId.value = data?.shareId || 'mock-share'
+  await ensureShareLink(selectedRank.value || activeMapRank.value || 1)
   activeView.value = 'collab'
+}
+
+async function ensureShareLink(rank) {
+  if (!currentPlanId.value) return ''
+  const targetRank = rank || selectedRank.value || activeMapRank.value || 1
+  const data = await createShare({ planId: currentPlanId.value, selectedRank: targetRank }).catch(() => null)
+  shareId.value = data?.shareId || shareId.value || 'mock-share'
+  return shareId.value
 }
 
 async function toggleVoice() {
@@ -1247,10 +1359,24 @@ function scrollToBottom() {
 
 function friendlyError(err) {
   if (err?.name === 'RequestTimeoutError' || String(err?.message || '').startsWith('REQUEST_TIMEOUT:')) {
-    return '抱歉，这次规划超时了。通常是外部服务响应过慢，你可以稍后重试，或先把需求说得更短一些。'
+    return '抱歉，这次规划等待超时了。前端已等待较长时间，通常是 LLM 或真实地点服务响应过慢。你可以稍后重试，或先缩短需求描述再试一次。'
   }
-  if (err?.status === 422) return '抱歉，暂时没有找到完全符合的方案，要不要扩大到 5km 内，或者放宽一点需求？'
+  if (err?.payload?.status === 'BLOCKED') {
+    const providerLabel = providerName(err?.payload?.provider)
+    const message = err?.payload?.error || err?.message || '当前规划被阻断'
+    return providerLabel ? `${providerLabel}卡住了：${message}` : message
+  }
+  if (err?.status === 422) return err?.payload?.error || '抱歉，暂时没有找到完全符合的方案，要不要扩大到 5km 内，或者放宽一点需求？'
+  if (err?.payload?.error) return err.payload.error
   return '抱歉，刚刚网络有点小问题，要不要再试一次？'
+}
+
+function providerName(provider) {
+  return {
+    amap: '高德地点/路线',
+    mimo: '模型解析',
+    search: '联网核验'
+  }[provider] || ''
 }
 </script>
 
@@ -1258,7 +1384,7 @@ function friendlyError(err) {
 .chat-app {
   --topbar-h: 4.5rem;
   --panel-gap: 1rem;
-  --content-max: min(70rem, calc(100vw - 3rem));
+  --content-max: min(94rem, calc(100vw - 3rem));
   --sidebar-w: clamp(20rem, 28vw, 23rem);
   --history-card-min-h: 8rem;
   --control-size: clamp(2.75rem, 4vw, 3rem);
@@ -1514,7 +1640,7 @@ input {
 }
 
 .chat-shell.result-mode {
-  width: min(68rem, 100%);
+  width: min(88rem, 100%);
   animation: result-rise .36s ease both;
 }
 
@@ -1689,7 +1815,7 @@ input {
 
 .step-summary {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   align-items: stretch;
   margin-bottom: 1rem;
@@ -1773,22 +1899,74 @@ input {
 .summary-share,
 .primary-button,
 .pick-button,
-.comment-box button {
+.comment-box button,
+.secondary-action {
   min-height: 3.2rem;
   border-radius: 1.15rem;
   padding: 0 1rem;
-  background: linear-gradient(180deg, var(--blue) 0%, var(--blue-deep) 100%);
-  color: #fff;
   font-weight: 900;
 }
 
-.summary-share {
+.summary-share,
+.primary-button,
+.pick-button,
+.comment-box button {
+  background: linear-gradient(180deg, var(--blue) 0%, var(--blue-deep) 100%);
+  color: #fff;
+}
+
+.summary-share,
+.secondary-action {
   min-width: 9.4rem;
+}
+
+.secondary-action {
+  background: rgba(255, 255, 255, .88);
+  color: #6f5140;
+}
+
+.result-workspace-head {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: .15rem;
+}
+
+.result-workspace-copy {
+  min-width: 0;
+  display: grid;
+  gap: .2rem;
+}
+
+.result-workspace-copy strong {
+  font-size: 1.05rem;
+}
+
+.result-workspace-copy small {
+  color: #8c6752;
+  font-size: .84rem;
+  line-height: 1.5;
+}
+
+.result-workspace-actions {
+  display: flex;
+  gap: .75rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.panel-header-actions {
+  display: flex;
+  gap: .75rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .result-workspace {
   display: grid;
-  grid-template-columns: minmax(23rem, clamp(24rem, 35vw, 29rem)) minmax(0, 1fr);
+  grid-template-columns: minmax(24rem, 30rem) minmax(0, 1fr);
   gap: 1.5rem;
   align-items: start;
 }
@@ -1822,6 +2000,10 @@ input {
 
 .plan-card.picked {
   background: linear-gradient(180deg, #fff7ee 0%, #ffe1cf 100%);
+}
+
+.plan-card.locked {
+  opacity: .9;
 }
 
 .plan-card.active {
@@ -1976,6 +2158,7 @@ input {
 
 .result-map {
   min-width: 0;
+  min-height: clamp(32rem, 64vh, 46rem);
 }
 
 .result-map :deep(.trip-map-panel) {

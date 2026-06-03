@@ -234,6 +234,13 @@ public class IntentParserAgent {
             location.put("radius", "nearby");
             return location;
         }
+        String normalized = text == null ? "" : text.trim();
+        if (isPlaceholderNearbyLocation(normalized)) {
+            location.put("city", null);
+            location.put("district", null);
+            location.put("radius", "nearby");
+            return location;
+        }
         String city = extractCityHint(text);
         location.put("city", city.isBlank() ? null : city);
         location.put("district", extractLocationHint(text, city));
@@ -262,17 +269,23 @@ public class IntentParserAgent {
                 .compile("(?<!\\d)([01]?\\d|2[0-3])\\s*[:.：]\\s*([0-5]\\d)(?!\\d)")
                 .matcher(text);
         if (digital.find()) return String.format("%02d:%s", Integer.parseInt(digital.group(1)), digital.group(2));
-        java.util.regex.Matcher chinese = java.util.regex.Pattern
+        java.util.regex.Matcher explicitChineseHour = java.util.regex.Pattern
                 .compile("(上午|早上|中午|下午|晚上|今晚)?\\s*([一二两三四五六七八九十]|1[0-2]|[1-9])\\s*点\\s*(半|[0-5]?\\d分?)?(开始|出发|左右|前后)?")
                 .matcher(text);
+        if (explicitChineseHour.find()) {
+            int hour = parseHour(explicitChineseHour.group(2));
+            String period = explicitChineseHour.group(1) == null ? "" : explicitChineseHour.group(1);
+            if ((period.contains("下午") || period.contains("晚上") || period.contains("今晚")) && hour < 12) hour += 12;
+            if (period.contains("中午") && hour < 11) hour += 12;
+            String minuteText = explicitChineseHour.group(3) == null ? "" : explicitChineseHour.group(3);
+            int minute = minuteText.contains("半") ? 30 : parseMinute(minuteText);
+            return String.format("%02d:%02d", hour, minute);
+        }
+        java.util.regex.Matcher chinese = java.util.regex.Pattern
+                .compile("(?<![点:\\d])([一二两三四五六七八九十])(?!\\s*点)")
+                .matcher(text);
         if (!chinese.find()) return null;
-        int hour = parseHour(chinese.group(2));
-        String period = chinese.group(1) == null ? "" : chinese.group(1);
-        if ((period.contains("下午") || period.contains("晚上") || period.contains("今晚")) && hour < 12) hour += 12;
-        if (period.contains("中午") && hour < 11) hour += 12;
-        String minuteText = chinese.group(3) == null ? "" : chinese.group(3);
-        int minute = minuteText.contains("半") ? 30 : parseMinute(minuteText);
-        return String.format("%02d:%02d", hour, minute);
+        return null;
     }
 
     private Integer extractGroupTotal(String text, boolean family, boolean friends, boolean couple, boolean solo) {
@@ -429,6 +442,16 @@ public class IntentParserAgent {
             if (value.contains(keyword)) return true;
         }
         return false;
+    }
+
+    private boolean isPlaceholderNearbyLocation(String text) {
+        return "附近".equals(text)
+                || "我附近".equals(text)
+                || "在我附近".equals(text)
+                || "当前位置".equals(text)
+                || "当前地点".equals(text)
+                || "本地".equals(text)
+                || "我所在城市".equals(text);
     }
 
     private int parseHour(String text) {

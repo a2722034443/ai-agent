@@ -21,7 +21,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class MimoClient {
     private static final String CHAT_COMPLETIONS_PATH = "/chat/completions";
-    private static final int FALLBACK_LANE_TIMEOUT_CAP_MS = 1400;
+    private static final int FALLBACK_LANE_TIMEOUT_CAP_MS = 3200;
     private static final int RACE_LANE_TIMEOUT_CAP_MS = 2800;
 
     private final ExternalClientProperties properties;

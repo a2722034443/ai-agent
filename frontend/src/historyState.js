@@ -30,19 +30,28 @@ export function normalizeHistoryMessages(historyMessages = []) {
 
 export function restoreThreadState(detail, normalizePlans) {
   const messages = normalizeHistoryMessages(detail?.messages || [])
-  const lastStructured = [...(detail?.messages || [])].reverse().find(message =>
-    ['ASSISTANT_PLAN_RESULT', 'ASSISTANT_CLARIFICATION', 'ASSISTANT_ERROR'].includes(message.kind)
+  const structuredMessages = [...(detail?.messages || [])].reverse()
+  const latestPlanResult = structuredMessages.find(message =>
+    message.kind === 'ASSISTANT_PLAN_RESULT'
+      && (Array.isArray(message.payload?.options) || Array.isArray(message.payload?.executionSteps))
   )
-  const payload = lastStructured?.payload || {}
+  const latestClarification = structuredMessages.find(message => message.kind === 'ASSISTANT_CLARIFICATION')
+  const latestError = structuredMessages.find(message => message.kind === 'ASSISTANT_ERROR')
+  const latestClarificationOrError = [latestClarification, latestError]
+    .filter(Boolean)
+    .sort((left, right) => new Date(right.createdAt) - new Date(left.createdAt))[0]
+  const effectiveStructured = latestPlanResult || latestClarificationOrError || null
+  const payload = effectiveStructured?.payload || {}
   return {
     messages,
-    currentPlanId: payload.planId || lastStructured?.planSessionId || '',
+    currentPlanId: payload.planId || effectiveStructured?.planSessionId || '',
     shownPlans: normalizePlans(Array.isArray(payload.options) ? payload.options : []),
     clarification: payload.clarification || {},
     currentStep: payload.currentStep || (messages.length ? 'need' : 'need'),
     activeView: payload.currentView || 'chat',
     mapOrigin: payload.mapOrigin || {},
     executionSteps: Array.isArray(payload.executionSteps) ? payload.executionSteps : [],
+    selectedRank: Number.isFinite(Number(payload.selectedRank)) ? Number(payload.selectedRank) : null,
     threadTitle: detail?.title || ''
   }
 }

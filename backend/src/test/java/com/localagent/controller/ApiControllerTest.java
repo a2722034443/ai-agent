@@ -235,6 +235,7 @@ class ApiControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
                 .andExpect(jsonPath("$.options").isEmpty())
+                .andExpect(jsonPath("$.intent.time_window.start").doesNotExist())
                 .andExpect(jsonPath("$.clarification.fields[?(@.key=='timeWindow')]").exists());
     }
 
@@ -548,12 +549,14 @@ class ApiControllerTest {
                         .contentType("application/json")
                         .content("{\"message\":\"" + familyPlanMessage + "\"}"))
                 .andExpect(status().isOk())
+                .andExpect(jsonPath("$.threadId").exists())
                 .andExpect(jsonPath("$.planId").exists())
                 .andExpect(jsonPath("$.options[0].timeline").isArray())
                 .andExpect(jsonPath("$.trace").isArray())
                 .andExpect(jsonPath("$.trace[0].mode").exists())
                 .andReturn();
 
+        String threadId = extractJsonString(planResult, "threadId");
         String planId = extractPlanId(planResult);
 
         mockMvc.perform(get("/api/plans/{id}", planId))
@@ -570,6 +573,16 @@ class ApiControllerTest {
                 .andExpect(jsonPath("$.status").value("COMPLETED"))
                 .andExpect(jsonPath("$.execution.orders").isArray())
                 .andExpect(jsonPath("$.execution.shareMessage").exists());
+
+        mockMvc.perform(get("/api/history/threads/{id}", threadId)
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", token))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.messages.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(3)))
+                .andExpect(jsonPath("$.messages[-1:].kind").value(org.hamcrest.Matchers.hasItem("ASSISTANT_PLAN_RESULT")))
+                .andExpect(jsonPath("$.messages[-1:].payload.currentView").value(org.hamcrest.Matchers.hasItem("collab")))
+                .andExpect(jsonPath("$.messages[-1:].payload.selectedRank").value(org.hamcrest.Matchers.hasItem(1)))
+                .andExpect(jsonPath("$.messages[-1:].payload.executionSteps").isArray());
 
         mockMvc.perform(post("/api/plans/{id}/confirm", planId)
                         .header("X-Client-Id", CLIENT_ID)
