@@ -128,6 +128,36 @@ class ApiControllerTest {
     }
 
     @Test
+    void immediateStartWordsDoNotAskForStartTimeAgain() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+        when(mimoClient.complete(anyString(), anyString())).thenThrow(new IllegalStateException("fast fallback"));
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = extractJsonString(sessionResult, "token");
+
+        String message = "现在在上海静安寺附近，4个朋友，预算800元，想先玩再吃饭";
+        mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content(objectMapper.writeValueAsString(Map.of(
+                                "message", message,
+                                "planCount", 3,
+                                "stopCountPreference", "标准"
+                        ))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
+                .andExpect(jsonPath("$.intent.time_window.start").isNotEmpty())
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='timeWindow')]").doesNotExist())
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='duration')]").exists());
+    }
+
+    @Test
     void durationClarificationAnswerUsesPreviousPlanContextAndReturnsOptions() throws Exception {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.hasKey(anyString())).thenReturn(true);
@@ -278,6 +308,46 @@ class ApiControllerTest {
                 .andExpect(jsonPath("$.intent.userFacts.answers.budget").value("300"))
                 .andExpect(jsonPath("$.intent.derived.location").exists())
                 .andExpect(jsonPath("$.intent.poiSearchStrategy.activityKeywords").isArray())
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='timeWindow')]").doesNotExist());
+    }
+
+    @Test
+    void clarificationAnswersAcceptImmediateStartTime() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = extractJsonString(sessionResult, "token");
+
+        String body = """
+                {
+                  "message": "想在附近玩玩",
+                  "planCount": 3,
+                  "stopCountPreference": "标准",
+                  "clarificationAnswers": {
+                    "location": "当前位置 121.588000,38.883000",
+                    "timeWindow": "现在",
+                    "duration": "4小时左右",
+                    "group": "我自己",
+                    "budget": "300",
+                    "preferences": "轻松逛逛和吃饭"
+                  }
+                }
+                """;
+
+        mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("READY"))
+                .andExpect(jsonPath("$.intent.time_window.start").isNotEmpty())
+                .andExpect(jsonPath("$.intent.userFacts.answers.timeWindow").value("现在"))
                 .andExpect(jsonPath("$.clarification.fields[?(@.key=='timeWindow')]").doesNotExist());
     }
 

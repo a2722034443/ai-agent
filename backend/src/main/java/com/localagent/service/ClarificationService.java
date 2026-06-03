@@ -1,5 +1,6 @@
 package com.localagent.service;
 
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -500,6 +501,10 @@ public class ClarificationService {
     }
 
     private String extractExplicitStart(String text) {
+        if (containsAny(text, "现在", "立刻", "马上", "立即")) {
+            LocalTime now = LocalTime.now().withSecond(0).withNano(0);
+            return String.format("%02d:%02d", now.getHour(), now.getMinute());
+        }
         java.util.regex.Matcher digital = java.util.regex.Pattern
                 .compile("(?<!\\d)([01]?\\d|2[0-3])\\s*[:.：]\\s*([0-5]\\d)(?!\\d)")
                 .matcher(text);
