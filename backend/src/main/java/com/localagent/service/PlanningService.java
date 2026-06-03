@@ -33,12 +33,15 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.time.LocalTime;
 import java.time.format.DateTimeParseException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class PlanningService {
+    private static final Logger log = LoggerFactory.getLogger(PlanningService.class);
     private static final List<Double> POI_RADIUS_STEPS_KM = List.of(12.0, 18.0, 25.0);
     private static final double WALKING_ROUTE_LIMIT_KM = 3.0;
     private static final double MIXED_ROUTE_LIMIT_KM = 10.0;
@@ -124,6 +127,8 @@ public class PlanningService {
                 PlanSession.create(thread.getId(), parentPlanSessionId, turnType, token, message)
         );
         historyService.markLatestPlanSession(thread, session.getId());
+        log.info("planning.start threadId={} planId={} turnType={} previousPlanId={} messageLength={}",
+                thread.getId(), session.getId(), turnType, parentPlanSessionId, message.length());
         try {
             Map<String, Object> intent = buildIntent(session.getId(), request, message);
             intent = clarificationService.mergeAnswers(intent, request == null ? null : request.clarificationAnswers());
@@ -141,6 +146,8 @@ public class PlanningService {
                         ChatMessageKind.ASSISTANT_CLARIFICATION,
                         "还需要补齐几个关键信息，补齐后我再查询真实地点并生成方案。",
                         clarificationPayload(session.getId(), intent, clarification, result));
+                log.info("planning.clarification threadId={} planId={} fields={}",
+                        thread.getId(), session.getId(), clarification.keySet());
                 return toResponse(session.getId(), assistant.getId());
             }
 
@@ -176,8 +183,12 @@ public class PlanningService {
                             ? "信息补齐了，已生成 3 套方案，下面展开查看地图和路线。"
                             : "方案已生成，下面展开查看地图和路线。",
                     planResultPayload(session.getId(), intent, result, Map.of(), "chat", "plans"));
+            log.info("planning.success threadId={} planId={} optionCount={} warnings={}",
+                    thread.getId(), session.getId(), options.size(), warnings.size());
             return toResponse(session.getId(), assistant.getId());
         } catch (RuntimeException ex) {
+            log.warn("planning.failed threadId={} planId={} status={} provider={} error={}",
+                    thread.getId(), session.getId(), statusOf(ex), providerOf(ex), ex.getMessage(), ex);
             historyService.appendAssistant(thread.getId(), session.getId(), parentPlanSessionId,
                     ChatMessageKind.ASSISTANT_ERROR,
                     userFacingError(ex),
