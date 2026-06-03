@@ -168,7 +168,7 @@ function renderPlan() {
 
   const routeOverlays = updateRouteLines(usable, activePlan.value)
   overlays.value = [...markerPool.slice(0, usable.length), ...routeOverlays]
-  map.setFitView(overlays.value, false, [48, 48, 48, 48])
+  map.setFitView(overlays.value, false, [24, 24, 24, 24])
 }
 
 function mapPoints(plan) {
@@ -475,7 +475,7 @@ onBeforeUnmount(() => {
 
 .map-body {
   position: relative;
-  height: 420px;
+  height: clamp(30rem, 62vh, 44rem);
   margin: 0 .9rem .9rem;
   border: 1px dashed rgba(145, 120, 95, .14);
   border-radius: 1.4rem;

@@ -12,6 +12,7 @@ import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.util.ArrayList;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import javax.net.ssl.SSLSession;
@@ -35,6 +36,25 @@ class MimoClientTest {
         assertThat(result.content()).contains("friends");
         assertThat(result.lane()).isEqualTo("secondary");
         assertThat(result.fallbackReason()).contains("primary");
+        assertThat(httpClient.apiKeys).containsExactly("primary-key", "secondary-key");
+    }
+
+    @Test
+    void fallsBackToSecondaryWhenPrimaryTimesOut() {
+        ExternalClientProperties properties = properties();
+        RecordingHttpClient httpClient = new RecordingHttpClient(List.of(
+                new IOException("timeout"),
+                response(200, """
+                        {"choices":[{"message":{"content":"{\\"scenario\\":\\"friends\\"}"}}]}
+                        """)
+        ));
+        MimoClient client = new MimoClient(properties, new ObjectMapper(), httpClient);
+
+        MimoClient.CompletionResult result = client.completeWithMeta("system", "user");
+
+        assertThat(result.content()).contains("friends");
+        assertThat(result.lane()).isEqualTo("secondary");
+        assertThat(result.failures()).anyMatch(reason -> reason.contains("primary"));
         assertThat(httpClient.apiKeys).containsExactly("primary-key", "secondary-key");
     }
 
@@ -82,20 +102,27 @@ class MimoClientTest {
     }
 
     private static class RecordingHttpClient extends HttpClient {
-        private final List<HttpResponse<String>> responses;
+        private final List<Object> responses;
         private final List<String> apiKeys = new ArrayList<>();
         private int index;
 
-        RecordingHttpClient(List<HttpResponse<String>> responses) {
-            this.responses = responses;
+        RecordingHttpClient(List<?> responses) {
+            this.responses = new ArrayList<>(responses);
         }
 
         @Override
         public <T> HttpResponse<T> send(HttpRequest request, HttpResponse.BodyHandler<T> responseBodyHandler)
                 throws IOException, InterruptedException {
             apiKeys.add(request.headers().firstValue("api-key").orElse(""));
+            Object next = responses.get(index++);
+            if (next instanceof IOException ioException) {
+                throw ioException;
+            }
+            if (next instanceof InterruptedException interruptedException) {
+                throw interruptedException;
+            }
             @SuppressWarnings("unchecked")
-            HttpResponse<T> response = (HttpResponse<T>) responses.get(index++);
+            HttpResponse<T> response = (HttpResponse<T>) next;
             return response;
         }
 
