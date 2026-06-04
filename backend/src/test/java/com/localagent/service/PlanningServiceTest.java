@@ -201,6 +201,53 @@ class PlanningServiceTest {
     }
 
     @Test
+    void friendsJinganScenarioGeneratesMeaningfullyDifferentOptionsWithinBudget() {
+        PlanResponse clarification = planningService.createPlan(
+                "test-token",
+                "今天晚上 7 点在上海静安寺附近，4 个朋友，预算 800 元，想先找一个有意思的地方再吃饭，路线不要太折腾。"
+        );
+
+        assertThat(clarification.status()).isEqualTo("NEEDS_CLARIFICATION");
+        assertThat(clarification.clarification().get("missingFields").toString())
+                .contains("duration")
+                .doesNotContain("group", "budget");
+
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                new PlanRequest(
+                        "3小时左右",
+                        null,
+                        null,
+                        Map.of("duration", "3小时左右"),
+                        clarification.planId(),
+                        clarification.threadId()
+                )
+        );
+
+        assertThat(response.status()).as(response.clarification().toString()).isEqualTo("READY");
+        assertThat(response.options()).hasSize(3);
+        assertThat(response.options()).extracting(option -> option.get("name")).doesNotHaveDuplicates();
+        assertThat(response.options()).extracting(option -> option.get("tagline")).doesNotHaveDuplicates();
+        assertThat(response.options()).extracting(option -> option.get("variantStrategy")).doesNotHaveDuplicates();
+        assertThat(response.options()).allSatisfy(option ->
+                assertThat((Integer) option.get("budgetEstimate")).isLessThanOrEqualTo(800));
+
+        List<String> diningNames = response.options().stream()
+                .map(option -> String.valueOf(option.get("diningName")))
+                .distinct()
+                .toList();
+        List<String> lastStops = response.options().stream()
+                .map(option -> String.valueOf(option.get("lastStop")))
+                .distinct()
+                .toList();
+        assertThat(diningNames).hasSizeGreaterThanOrEqualTo(2);
+        assertThat(lastStops).hasSizeGreaterThanOrEqualTo(2);
+        assertThat(response.options().toString())
+                .contains("轻松", "热闹", "高效")
+                .doesNotContain("预算约900元");
+    }
+
+    @Test
     void functionalAcceptanceMatrixCoversMultiOriginIncidentsDeadlineAndLocationTrust() {
         String message = "今天14:00我和两个朋友在大连星海广场汇合，我在大连世界博览广场，朋友A在星海会展中心，朋友B在大连拿库古典车博览馆，先去大连科学剧场无票看演出，然后去家庭海鲜餐厅满员吃饭，之后喝杯咖啡，17:00要到家，预算900以内，帮我订票订座并提前叫车。";
 
