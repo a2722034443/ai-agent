@@ -147,8 +147,9 @@ export function getMemory() {
   return request('/api/memory', { method: 'GET' })
 }
 
-export function getGuardStatus() {
-  return request('/api/guard/status', { method: 'GET' })
+export function getGuardStatus(planId) {
+  const query = planId ? `?planId=${encodeURIComponent(planId)}` : ''
+  return request(`/api/guard/status${query}`, { method: 'GET' })
 }
 
 export function getHistoryThreads() {

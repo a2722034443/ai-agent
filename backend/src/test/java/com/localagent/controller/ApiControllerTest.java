@@ -605,6 +605,50 @@ class ApiControllerTest {
     }
 
     @Test
+    void guardStatusUsesPlanContextAndLabelsProviderSources() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = extractJsonString(sessionResult, "token");
+
+        String familyPlanMessage = "今天下午2点在大连星海广场附近，两个大人一个孩子，预算600元，想安排亲子活动和晚餐，时间4小时左右";
+        MvcResult planResult = mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content("{\"message\":\"" + familyPlanMessage + "\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("READY"))
+                .andReturn();
+        String planId = extractPlanId(planResult);
+
+        mockMvc.perform(post("/api/plans/{id}/confirm", planId)
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content("{\"rank\":1}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("COMPLETED"));
+
+        mockMvc.perform(get("/api/guard/status")
+                        .header("X-Session-Token", token)
+                        .param("planId", planId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.planId").value(planId))
+                .andExpect(jsonPath("$.mode").exists())
+                .andExpect(jsonPath("$.provider").exists())
+                .andExpect(jsonPath("$.steps").isArray())
+                .andExpect(jsonPath("$.steps[0].source").exists())
+                .andExpect(jsonPath("$.steps[0].status").exists())
+                .andExpect(jsonPath("$.fallbackOptions").isArray());
+    }
+
+    @Test
     void storesMessageLevelHistoryAndSupportsRenameDelete() throws Exception {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.hasKey(anyString())).thenReturn(true);

@@ -16,6 +16,7 @@ import com.localagent.dto.ApiDtos.ThreadSummaryResponse;
 import com.localagent.dto.ApiDtos.VoteRequest;
 import com.localagent.service.AmapPoiSearchTool;
 import com.localagent.service.CollaborationMockService;
+import com.localagent.service.GuardService;
 import com.localagent.service.HistoryService;
 import com.localagent.service.PlanBlockedException;
 import com.localagent.service.PlanningService;
@@ -50,18 +51,21 @@ public class ApiController {
     private final PlanningService planningService;
     private final AmapPoiSearchTool poiSearchTool;
     private final CollaborationMockService collaborationMockService;
+    private final GuardService guardService;
     private final SpeechTranscriptionService speechTranscriptionService;
     private final HistoryService historyService;
 
     public ApiController(SessionService sessionService, PlanningService planningService,
                          AmapPoiSearchTool poiSearchTool,
                          CollaborationMockService collaborationMockService,
+                         GuardService guardService,
                          SpeechTranscriptionService speechTranscriptionService,
                          HistoryService historyService) {
         this.sessionService = sessionService;
         this.planningService = planningService;
         this.poiSearchTool = poiSearchTool;
         this.collaborationMockService = collaborationMockService;
+        this.guardService = guardService;
         this.speechTranscriptionService = speechTranscriptionService;
         this.historyService = historyService;
     }
@@ -161,8 +165,8 @@ public class ApiController {
     }
 
     @GetMapping("/guard/status")
-    public Map<String, Object> guardStatus() {
-        return collaborationMockService.guardStatus();
+    public Map<String, Object> guardStatus(@RequestParam(required = false) UUID planId) {
+        return guardService.status(planId);
     }
 
     @PostMapping("/speech/transcribe")

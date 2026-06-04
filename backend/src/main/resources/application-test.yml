@@ -20,6 +20,8 @@ external:
   amap:
     enabled: false
     web-service-key:
+    detail-timeout-ms: 3000
+    traffic-enabled: false
   search:
     enabled: false
     tavily-api-key:
@@ -27,6 +29,7 @@ external:
     enabled: false
     api-key:
     router-mode: primary-fallback
+    intent-parser-mode: rule-only
     secondary:
       enabled: true
       api-key:

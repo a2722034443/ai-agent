@@ -317,8 +317,12 @@
         </header>
         <ol>
           <li v-for="step in executionSteps" :key="step.name" :class="step.status">
-            <span>{{ step.status === 'done' ? '✓' : step.status === 'doing' ? '...' : '!' }}</span>
-            {{ step.name }}
+            <span>{{ stepIcon(step.status) }}</span>
+            <div class="execution-step-copy">
+              <strong>{{ step.name }}</strong>
+              <small v-if="step.message">{{ step.message }}</small>
+              <em v-if="step.source || step.provider">{{ guardSourceLabel(step) }}</em>
+            </div>
           </li>
         </ol>
         <AnimalButton class="primary-button" type="primary" size="large" @click="copyShareMessage">发给同行人</AnimalButton>
@@ -463,12 +467,12 @@ const planningProgress = computed(() => {
   const label = percent < 18
     ? '正在理解你的时间、地点和同行约束'
     : percent < 38
-      ? '正在拆解活动、餐饮和补充点位'
+      ? '正在调用意图解析并准备兜底规则'
       : percent < 62
         ? '正在查询真实地点并过滤不可用结果'
         : percent < 82
           ? '正在计算顺路动线和分段路程'
-          : '正在整理方案卡片和风险提醒'
+          : '正在核验营业状态并整理风险提醒'
   return { percent, label }
 })
 const planningSteps = computed(() => {
@@ -477,7 +481,8 @@ const planningSteps = computed(() => {
     { key: 'intent', index: 1, label: '识别约束', status: percent >= 18 ? 'done' : 'doing' },
     { key: 'poi', index: 2, label: '查找地点', status: percent >= 45 ? 'done' : percent >= 18 ? 'doing' : 'pending' },
     { key: 'route', index: 3, label: '计算路线', status: percent >= 72 ? 'done' : percent >= 45 ? 'doing' : 'pending' },
-    { key: 'cards', index: 4, label: '生成卡片', status: percent >= 92 ? 'done' : percent >= 72 ? 'doing' : 'pending' }
+    { key: 'guard', index: 4, label: '核验风险', status: percent >= 86 ? 'done' : percent >= 72 ? 'doing' : 'pending' },
+    { key: 'cards', index: 5, label: '生成卡片', status: percent >= 94 ? 'done' : percent >= 86 ? 'doing' : 'pending' }
   ]
 })
 const themeHero = computed(() => {
@@ -547,7 +552,7 @@ onMounted(() => {
   getMemory().then(data => {
     if (Array.isArray(data?.tags)) memoryTags.value = data.tags
   }).catch(() => {})
-  getGuardStatus().then(data => {
+  getGuardStatus(currentPlanId.value).then(data => {
     if (Array.isArray(data?.steps)) executionSteps.value = data.steps
   }).catch(() => {})
 })
@@ -1193,6 +1198,7 @@ async function selectPlan(rank) {
       const data = await confirmPlan(currentPlanId.value, rank)
       executionSteps.value = buildExecutionSteps(data.execution)
       confirmedRank.value = rank
+      await refreshGuardStatus()
       await ensureShareLink(rank)
       await loadThreads()
       activeView.value = 'collab'
@@ -1465,6 +1471,36 @@ function buildExecutionSteps(execution = {}) {
     steps.push({ name: '分享消息已生成', status: 'done' })
   }
   return steps.length ? steps : [...defaultExecutionSteps]
+}
+
+async function refreshGuardStatus() {
+  if (!currentPlanId.value) return
+  const data = await getGuardStatus(currentPlanId.value).catch(() => null)
+  if (Array.isArray(data?.steps) && data.steps.length) {
+    executionSteps.value = data.steps.map(step => ({
+      name: step.name,
+      status: step.status || 'waiting',
+      message: step.message || '',
+      source: step.source || step.mode || '',
+      provider: step.provider || ''
+    }))
+  }
+}
+
+function stepIcon(status) {
+  if (status === 'done') return '✓'
+  if (status === 'doing') return '...'
+  if (status === 'warn') return '!'
+  if (status === 'blocked') return '!'
+  if (status === 'skip') return 'i'
+  return '...'
+}
+
+function guardSourceLabel(step) {
+  const source = step.source || step.mode || 'unknown'
+  const provider = step.provider ? ` · ${providerName(step.provider) || step.provider}` : ''
+  const label = source === 'real' ? '真实数据' : source === 'mock' ? '模拟状态' : source === 'skip' ? '待确认' : source
+  return `${label}${provider}`
 }
 
 function scrollToBottom() {
@@ -2658,6 +2694,9 @@ input {
   border-radius: 1rem;
   padding: .95rem 1rem;
   background: rgba(255, 255, 255, .82);
+  display: flex;
+  align-items: flex-start;
+  gap: .7rem;
 }
 
 .execution-panel li span {
@@ -2665,7 +2704,7 @@ input {
   place-items: center;
   width: 1.6rem;
   height: 1.6rem;
-  margin-right: .55rem;
+  flex: 0 0 1.6rem;
   border-radius: 999px;
   background: #ffd995;
   color: var(--ink-strong);
@@ -2679,6 +2718,36 @@ input {
 .execution-panel li.doing span {
   background: #8cb2ff;
   color: #fff;
+}
+
+.execution-panel li.warn span,
+.execution-panel li.blocked span {
+  background: #ffb199;
+}
+
+.execution-panel li.skip span {
+  background: #d6dce8;
+}
+
+.execution-step-copy {
+  display: grid;
+  gap: .18rem;
+}
+
+.execution-step-copy strong {
+  color: var(--ink-strong);
+}
+
+.execution-step-copy small {
+  color: #6b5b51;
+  line-height: 1.45;
+}
+
+.execution-step-copy em {
+  font-style: normal;
+  color: #557be6;
+  font-size: .82rem;
+  font-weight: 800;
 }
 
 .memory-grid {

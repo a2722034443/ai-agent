@@ -2,6 +2,7 @@ package com.localagent.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.localagent.config.ExternalClientProperties;
 import com.localagent.dto.ApiDtos.PlanRequest;
 import com.localagent.dto.ApiDtos.PlanResponse;
 import com.localagent.model.ChatMessage;
@@ -62,11 +63,13 @@ public class PlanningService {
     private final IntentParserAgent intentParserAgent;
     private final ClarificationService clarificationService;
     private final AmapWeatherTool weatherTool;
+    private final AmapPoiDetailTool poiDetailTool;
     private final PlanValidationService planValidationService;
     private final PromptCatalog promptCatalog;
     private final ToolTraceService toolTraceService;
     private final HistoryService historyService;
     private final ObjectMapper objectMapper;
+    private final ExternalClientProperties properties;
     private final boolean allowMockPoi;
     private final ExecutorService optionalToolExecutor = Executors.newFixedThreadPool(4);
 
@@ -81,11 +84,13 @@ public class PlanningService {
                            IntentParserAgent intentParserAgent,
                            ClarificationService clarificationService,
                            AmapWeatherTool weatherTool,
+                           AmapPoiDetailTool poiDetailTool,
                            PlanValidationService planValidationService,
                            PromptCatalog promptCatalog,
                            ToolTraceService toolTraceService,
                            HistoryService historyService,
                            ObjectMapper objectMapper,
+                           ExternalClientProperties properties,
                            @Value("${app.allow-mock-poi:false}") boolean allowMockPoi) {
         this.planSessionRepository = planSessionRepository;
         this.planOptionRepository = planOptionRepository;
@@ -98,11 +103,13 @@ public class PlanningService {
         this.intentParserAgent = intentParserAgent;
         this.clarificationService = clarificationService;
         this.weatherTool = weatherTool;
+        this.poiDetailTool = poiDetailTool;
         this.planValidationService = planValidationService;
         this.promptCatalog = promptCatalog;
         this.toolTraceService = toolTraceService;
         this.historyService = historyService;
         this.objectMapper = objectMapper;
+        this.properties = properties;
         this.allowMockPoi = allowMockPoi;
     }
 
@@ -162,6 +169,7 @@ public class PlanningService {
             List<Map<String, Object>> webEvidence = optionalEvidence(session.getId(), evidenceFuture);
             List<Map<String, Object>> warnings = new ArrayList<>(weatherWarnings(weather));
             List<Map<String, Object>> options = buildOptions(session.getId(), intent, candidates, weather, warnings);
+            addPoiDetailWarnings(session.getId(), options, warnings);
             planValidationService.validate(session.getId(), options, candidates);
 
             Map<String, Object> result = new LinkedHashMap<>();
@@ -213,13 +221,21 @@ public class PlanningService {
     private Map<String, Object> buildIntent(UUID planId, PlanRequest request, String message) {
         Map<String, Object> parsed = shouldSkipIntentParse(request)
                 ? new LinkedHashMap<>()
-                : intentParserAgent.fastParse(planId, message);
+                : parseIntent(planId, message);
         Map<String, Object> previous = previousIntent(request);
         Map<String, Object> intent = mergeIntent(previous, parsed);
         String rawMessage = rawMessage(previous, message);
         intent.put("rawMessage", rawMessage);
         clarificationService.ensureUserFacts(intent, rawMessage);
         return intent;
+    }
+
+    private Map<String, Object> parseIntent(UUID planId, String message) {
+        String mode = properties.getLlm().getIntentParserMode();
+        if ("rule-only".equalsIgnoreCase(mode)) {
+            return intentParserAgent.fastParse(planId, message);
+        }
+        return intentParserAgent.parse(planId, message);
     }
 
     private boolean shouldSkipIntentParse(PlanRequest request) {
@@ -350,6 +366,7 @@ public class PlanningService {
         execution.put("gift", gift);
         execution.put("shareMessage", shareMessage);
         execution.put("allSuccess", true);
+        execution.put("selectedRank", rank);
         session.markCompleted(toJson(execution));
         planSessionRepository.save(session);
         ChatMessage assistant = historyService.appendAssistant(thread.getId(), session.getId(), session.getParentPlanSessionId(),
@@ -915,7 +932,9 @@ public class PlanningService {
                 original.isIndoor(),
                 original.isSocial(),
                 original.isTicketProblem(),
-                original.isSeatProblem()
+                original.isSeatProblem(),
+                original.getSourceProvider(),
+                original.getSourcePoiId()
         );
     }
 
@@ -948,6 +967,8 @@ public class PlanningService {
             timelineItem.put("lowCalorie", poi.isLowCalorie());
             timelineItem.put("lng", poi.getLng());
             timelineItem.put("lat", poi.getLat());
+            timelineItem.put("sourceProvider", poi.getSourceProvider());
+            timelineItem.put("sourcePoiId", poi.getSourcePoiId());
             timeline.add(timelineItem);
             // 累加当前站点停留时间 + 到下一站的交通时间
             currentTime = currentTime.plusMinutes(poi.getDurationMinutes());
@@ -1277,6 +1298,45 @@ public class PlanningService {
             return List.of(warning("天气暂不可用", "建议出发前自行确认天气变化。"));
         }
         return List.of(warning("天气建议", weatherSuggestion(weather)));
+    }
+
+    private void addPoiDetailWarnings(UUID planId, List<Map<String, Object>> options, List<Map<String, Object>> warnings) {
+        List<String> conflicts = new ArrayList<>();
+        int checked = 0;
+        int skipped = 0;
+        for (Map<String, Object> option : options.stream().limit(3).toList()) {
+            for (Map<String, Object> stop : castList(option.get("timeline"))) {
+                if (checked >= 9) {
+                    break;
+                }
+                String sourcePoiId = String.valueOf(stop.getOrDefault("sourcePoiId", ""));
+                if (sourcePoiId.isBlank() || "null".equals(sourcePoiId)) {
+                    skipped++;
+                    continue;
+                }
+                checked++;
+                Map<String, Object> detail = poiDetailTool.fetchDetail(planId, sourcePoiId,
+                        String.valueOf(stop.getOrDefault("name", "")));
+                LocalTime time = parseStopTime(stop.get("time"));
+                if (poiDetailTool.isClosedAt(detail, time)) {
+                    conflicts.add(String.valueOf(stop.getOrDefault("name", sourcePoiId)) + " 在 "
+                            + stop.getOrDefault("time", "") + " 可能未营业");
+                }
+            }
+        }
+        if (!conflicts.isEmpty()) {
+            warnings.add(warning("营业时间风险", String.join("；", conflicts)));
+        } else if (checked == 0 && skipped > 0) {
+            warnings.add(warning("营业状态待确认", "当前候选地点缺少可核验的高德 POI ID，出发前建议再次确认营业时间。"));
+        }
+    }
+
+    private LocalTime parseStopTime(Object value) {
+        try {
+            return LocalTime.parse(String.valueOf(value));
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private Map<String, Object> warning(String title, String message) {

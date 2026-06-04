@@ -31,6 +31,8 @@ public class Poi {
     private boolean social;
     private boolean ticketProblem;
     private boolean seatProblem;
+    private String sourceProvider;
+    private String sourcePoiId;
 
     public Poi() {
     }
@@ -39,6 +41,14 @@ public class Poi {
                int durationMinutes, int avgPrice, double rating, boolean kidFriendly,
                boolean lowCalorie, boolean indoor, boolean social, boolean ticketProblem,
                boolean seatProblem) {
+        this(name, type, subtype, address, lng, lat, durationMinutes, avgPrice, rating, kidFriendly,
+                lowCalorie, indoor, social, ticketProblem, seatProblem, "", "");
+    }
+
+    public Poi(String name, PoiType type, String subtype, String address, double lng, double lat,
+               int durationMinutes, int avgPrice, double rating, boolean kidFriendly,
+               boolean lowCalorie, boolean indoor, boolean social, boolean ticketProblem,
+               boolean seatProblem, String sourceProvider, String sourcePoiId) {
         this.id = UUID.randomUUID();
         this.name = name;
         this.type = type;
@@ -55,6 +65,8 @@ public class Poi {
         this.social = social;
         this.ticketProblem = ticketProblem;
         this.seatProblem = seatProblem;
+        this.sourceProvider = sourceProvider;
+        this.sourcePoiId = sourcePoiId;
     }
 
     public UUID getId() { return id; }
@@ -73,4 +85,6 @@ public class Poi {
     public boolean isSocial() { return social; }
     public boolean isTicketProblem() { return ticketProblem; }
     public boolean isSeatProblem() { return seatProblem; }
+    public String getSourceProvider() { return sourceProvider; }
+    public String getSourcePoiId() { return sourcePoiId; }
 }
