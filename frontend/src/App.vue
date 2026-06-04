@@ -186,6 +186,10 @@
             </article>
           </aside>
           <div class="result-map">
+            <div class="location-trust">
+              <strong>{{ locationTrust.title }}</strong>
+              <span>{{ locationTrust.message }}</span>
+            </div>
             <TripMap
               :plans="shownPlans"
               :active-rank="activeMapRank"
@@ -307,7 +311,7 @@
         <header>
           <div>
             <h1>AI 正在帮你把事做完</h1>
-            <p>门票、餐厅和提醒会按顺序推进，你只用准备出发。</p>
+            <p>{{ executionModeText }}</p>
           </div>
           <div class="panel-header-actions">
             <AnimalButton v-if="hasFinalPlans" class="secondary-action" type="default" size="large" @click="goBackToPlanWorkspace">
@@ -325,6 +329,27 @@
             </div>
           </li>
         </ol>
+        <div v-if="executionOrders.length" class="execution-orders">
+          <article v-for="order in executionOrders" :key="order.orderNo || `${order.action}-${order.targetName}`" class="execution-order">
+            <div>
+              <b>{{ order.actionLabel || actionLabel(order.action) }}</b>
+              <strong>{{ order.targetName || order.target || '执行事项' }}</strong>
+              <small>{{ order.orderNo || '模拟订单号待生成' }} · {{ order.statusLabel || statusLabel(order.status) }}</small>
+            </div>
+            <span>{{ guardSourceLabel(order) }}</span>
+            <p v-if="order.message">{{ order.message }}</p>
+            <p v-if="order.vehicle || order.pickupCode || order.eta">
+              {{ executionOrderMeta(order) }}
+            </p>
+          </article>
+        </div>
+        <div v-if="executionFallbacks.length" class="execution-fallbacks">
+          <h2>异常已处理</h2>
+          <article v-for="item in executionFallbacks" :key="`${item.originalTarget}-${item.fallbackTarget}`">
+            <strong>{{ item.originalTarget }} → {{ item.fallbackTarget }}</strong>
+            <p>{{ item.reason }}</p>
+          </article>
+        </div>
         <AnimalButton class="primary-button" type="primary" size="large" @click="copyShareMessage">发给同行人</AnimalButton>
       </section>
 
@@ -445,6 +470,10 @@ const currentPlanId = ref('')
 const shownPlans = ref([])
 const activeMapRank = ref(1)
 const mapOrigin = ref({})
+const locationTrust = ref({
+  title: '定位待确认',
+  message: '生成方案后会显示出发点来源；若使用“当前位置”，会优先请求浏览器高精度定位。'
+})
 const clarification = ref({})
 const clarificationAnswers = ref({})
 const completedClarificationAnswers = ref({})
@@ -457,11 +486,21 @@ const votedRank = ref(null)
 const collabComment = ref('')
 const comments = ref([{ id: 1, name: '老婆', text: '方案 1 不错，吃饭时间能不能晚半小时？' }])
 const executionSteps = ref([...defaultExecutionSteps])
+const executionState = ref({})
 const memoryTags = ref(['老婆减肥', '孩子要亲子设施', '朋友不吃辣', '周末不跑远'])
 
 const hasFinalPlans = computed(() => shownPlans.value.length > 0)
 const showPlanWorkspace = computed(() => activeView.value === 'chat' && hasFinalPlans.value && currentStep.value === 'plans')
 const showComposer = computed(() => activeView.value !== 'chat' || currentStep.value !== 'plans' || !hasFinalPlans.value)
+const executionOrders = computed(() => Array.isArray(executionState.value?.orders) ? executionState.value.orders : [])
+const executionFallbacks = computed(() => Array.isArray(executionState.value?.fallbackOptions) ? executionState.value.fallbackOptions : [])
+const executionModeText = computed(() => {
+  const mode = executionState.value?.mode
+  const provider = executionState.value?.provider
+  if (mode === 'mock') return '当前为 Mock 执行演示：打车、订座、购票、配送和分享会生成可核验的模拟订单。'
+  if (provider) return `执行服务来自 ${providerName(provider) || provider}，每一步会展示状态和异常处理。`
+  return '门票、餐厅和提醒会按顺序推进，你只用准备出发。'
+})
 const planningProgress = computed(() => {
   const percent = planningProgressPercent.value
   const label = percent < 18
@@ -606,6 +645,12 @@ function resetConversation() {
   shownPlans.value = []
   activeMapRank.value = 1
   mapOrigin.value = {}
+  locationTrust.value = {
+    title: '定位待确认',
+    message: '生成方案后会显示出发点来源；若使用“当前位置”，会优先请求浏览器高精度定位。'
+  }
+  executionState.value = {}
+  executionSteps.value = [...defaultExecutionSteps]
   clarification.value = {}
   clarificationAnswers.value = {}
   completedClarificationAnswers.value = {}
@@ -787,6 +832,7 @@ function applyPlanResponse(data) {
   selectedRank.value = nextSelectedRank
   confirmedRank.value = nextSelectedRank
   if (data?.execution && Object.keys(data.execution).length) {
+    executionState.value = data.execution
     executionSteps.value = buildExecutionSteps(data.execution)
   }
   if (data?.status === 'COMPLETED') {
@@ -818,7 +864,9 @@ async function openThread(threadId) {
     currentStep.value = restored.currentStep
     activeView.value = restored.activeView
     mapOrigin.value = restored.mapOrigin
+    locationTrust.value = locationTrustFromOrigin(restored.mapOrigin)
     messages.value = restored.messages
+    executionState.value = restored.execution || {}
     executionSteps.value = restored.executionSteps.length ? restored.executionSteps : [...defaultExecutionSteps]
     clarificationAnswers.value = {}
     completedClarificationAnswers.value = {}
@@ -970,7 +1018,13 @@ async function buildClarificationAnswers() {
     const position = await getBrowserPosition()
     if (position) {
       answers.location = `当前位置 ${position.lng.toFixed(6)},${position.lat.toFixed(6)}`
+      locationTrust.value = locationTrustFromBrowser(position)
       clarificationAnswers.value = { ...clarificationAnswers.value, location: answers.location }
+    } else {
+      locationTrust.value = {
+        title: '定位未授权',
+        message: '浏览器没有返回当前位置，请手动输入出发点；仅用“附近”会影响地图起点准确度。'
+      }
     }
   }
   return answers
@@ -979,7 +1033,14 @@ async function buildClarificationAnswers() {
 async function enrichMessageWithCurrentLocation(text) {
   if (!mentionsCurrentLocation(text) || hasCoordinates(text)) return text
   const position = await getBrowserPosition()
-  if (!position) return text
+  if (!position) {
+    locationTrust.value = {
+      title: '定位未授权',
+      message: '浏览器没有返回当前位置，后续如只写“附近”可能需要补充具体出发点。'
+    }
+    return text
+  }
+  locationTrust.value = locationTrustFromBrowser(position)
   return `${text} 当前位置 ${position.lng.toFixed(6)},${position.lat.toFixed(6)}`
 }
 
@@ -1003,7 +1064,8 @@ function getBrowserPosition() {
     navigator.geolocation.getCurrentPosition(
       position => resolve({
         lng: position.coords.longitude,
-        lat: position.coords.latitude
+        lat: position.coords.latitude,
+        accuracy: position.coords.accuracy
       }),
       () => resolve(null),
       { enableHighAccuracy: true, timeout: 1500, maximumAge: 300000 }
@@ -1018,6 +1080,9 @@ function replaceLoading(id, next) {
 
 function syncMapState(data, plans) {
   mapOrigin.value = data?.intent?.location || {}
+  if (Object.keys(mapOrigin.value || {}).length) {
+    locationTrust.value = locationTrustFromOrigin(mapOrigin.value)
+  }
   const preferredRank = Number.isFinite(Number(data?.selectedRank)) ? Number(data.selectedRank) : activeMapRank.value
   if (plans.some(plan => plan.rank === preferredRank)) {
     activeMapRank.value = preferredRank
@@ -1094,6 +1159,41 @@ function normalizePlans(options) {
       routeHighlights: Array.isArray(option.routeHighlights) ? option.routeHighlights : []
     }
   })
+}
+
+function locationTrustFromBrowser(position) {
+  const accuracy = Number(position?.accuracy)
+  const accuracyText = Number.isFinite(accuracy) ? `约 ${Math.round(accuracy)} 米内` : '浏览器未返回精度'
+  return {
+    title: '浏览器定位',
+    message: `已使用浏览器高精度定位作为出发点，精度${accuracyText}；最终导航仍建议跳转高德确认。`
+  }
+}
+
+function locationTrustFromOrigin(origin = {}) {
+  const text = JSON.stringify(origin)
+  if (Number.isFinite(Number(origin.lng)) && Number.isFinite(Number(origin.lat))) {
+    return {
+      title: origin.source === 'html5' ? '浏览器定位' : '地图起点已解析',
+      message: `出发点坐标 ${Number(origin.lng).toFixed(5)}, ${Number(origin.lat).toFixed(5)}；点位和路线以高德地图打开结果为准。`
+    }
+  }
+  if (text.includes('当前位置')) {
+    return {
+      title: '当前位置待确认',
+      message: '当前方案识别到“当前位置”，但没有可靠坐标；建议允许浏览器定位或手动输入具体地点。'
+    }
+  }
+  if (text && text !== '{}') {
+    return {
+      title: '文本地点定位',
+      message: '出发点来自用户输入或后端解析，地图会按高德 POI/地理编码结果展示，出发前建议打开高德复核。'
+    }
+  }
+  return {
+    title: '定位待确认',
+    message: '当前未获得明确出发点，地图会先按方案首站估算起点。'
+  }
 }
 
 function normalizeRoute(route) {
@@ -1196,15 +1296,23 @@ async function selectPlan(rank) {
   if (currentPlanId.value) {
     try {
       const data = await confirmPlan(currentPlanId.value, rank)
+      executionState.value = data.execution || {}
       executionSteps.value = buildExecutionSteps(data.execution)
       confirmedRank.value = rank
       await refreshGuardStatus()
       await ensureShareLink(rank)
       await loadThreads()
-      activeView.value = 'collab'
+      activeView.value = 'execute'
       return
     } catch {
       confirmedRank.value = null
+      executionState.value = {
+        mode: 'mock',
+        provider: 'local-mock',
+        fallbackOptions: [
+          { originalTarget: '原餐厅', fallbackTarget: '同评分低卡餐厅', reason: '餐厅满位，已切换到可订座替代方案。' }
+        ]
+      }
       executionSteps.value = [
         { name: '餐厅满位，已为你更换同评分低卡餐厅', status: 'done' },
         { name: '门票和配送继续执行', status: 'done' }
@@ -1455,14 +1563,30 @@ function writeAscii(view, offset, text) {
   }
 }
 function copyShareMessage() {
-  const text = '搞定啦，下午按方案出发，门票、餐厅位和配送我都安排好了。'
+  const text = executionState.value?.shareMessage || '搞定啦，下午按方案出发，门票、餐厅位和配送我都安排好了。'
   navigator.clipboard?.writeText(text)
 }
 
 function buildExecutionSteps(execution = {}) {
+  if (Array.isArray(execution.executionSteps) && execution.executionSteps.length) {
+    return execution.executionSteps.map(step => ({
+      name: step.name || '执行事项',
+      status: step.status || 'done',
+      message: step.message || '',
+      source: step.source || step.mode || '',
+      provider: step.provider || '',
+      orderNo: step.orderNo || ''
+    }))
+  }
   const steps = []
   for (const order of execution.orders || []) {
-    steps.push({ name: order.targetName || '执行事项', status: 'done' })
+    steps.push({
+      name: `${order.actionLabel || actionLabel(order.action)} · ${order.targetName || order.target || '执行事项'}`,
+      status: order.status === 'fallback_confirmed' ? 'warn' : 'done',
+      message: order.message || '',
+      source: order.source || order.mode || '',
+      provider: order.provider || ''
+    })
   }
   if (execution.gift?.targetName) {
     steps.push({ name: execution.gift.targetName, status: 'done' })
@@ -1503,6 +1627,35 @@ function guardSourceLabel(step) {
   return `${label}${provider}`
 }
 
+function actionLabel(action) {
+  return {
+    ride_hailing: '打车',
+    restaurant_reservation: '订座',
+    ticket_booking: '购票',
+    delivery: '配送',
+    share_message: '分享'
+  }[action] || '执行'
+}
+
+function statusLabel(status) {
+  return {
+    confirmed: '已确认',
+    fallback_confirmed: '已替换并确认',
+    blocked: '已阻断',
+    waiting: '等待中'
+  }[status] || '已处理'
+}
+
+function executionOrderMeta(order) {
+  const parts = []
+  if (order.vehicle) parts.push(`车辆 ${order.vehicle}`)
+  if (order.driver) parts.push(order.driver)
+  if (order.estimatedFare) parts.push(`预计 ${formatMoney(order.estimatedFare)}`)
+  if (order.pickupCode) parts.push(`取票码 ${order.pickupCode}`)
+  if (order.eta) parts.push(`预计 ${order.eta} 送达`)
+  return parts.join(' · ')
+}
+
 function scrollToBottom() {
   document.querySelector('.message-list')?.scrollTo({ top: 99999, behavior: 'smooth' })
 }
@@ -1525,7 +1678,9 @@ function providerName(provider) {
   return {
     amap: '高德地点/路线',
     mimo: '模型解析',
-    search: '联网核验'
+    search: '联网核验',
+    mock: '模拟执行',
+    'local-mock': '本地 Mock'
   }[provider] || ''
 }
 </script>
@@ -2311,6 +2466,27 @@ input {
   min-height: clamp(32rem, 64vh, 46rem);
 }
 
+.location-trust {
+  display: grid;
+  gap: .25rem;
+  margin-bottom: .75rem;
+  border: 1px solid rgba(85, 123, 230, .22);
+  border-radius: 1rem;
+  padding: .75rem .9rem;
+  background: rgba(255, 255, 255, .78);
+}
+
+.location-trust strong {
+  color: #557be6;
+  font-size: .9rem;
+}
+
+.location-trust span {
+  color: #6b5b51;
+  font-size: .84rem;
+  line-height: 1.45;
+}
+
 .result-map :deep(.trip-map-panel) {
   margin-top: 0;
 }
@@ -2748,6 +2924,71 @@ input {
   color: #557be6;
   font-size: .82rem;
   font-weight: 800;
+}
+
+.execution-orders,
+.execution-fallbacks {
+  display: grid;
+  gap: .85rem;
+  margin: 1rem 0;
+}
+
+.execution-order,
+.execution-fallbacks article {
+  border: 1px solid rgba(168, 152, 120, .42);
+  border-radius: 1rem;
+  padding: .95rem 1rem;
+  background: rgba(255, 255, 255, .76);
+}
+
+.execution-order {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .45rem .8rem;
+}
+
+.execution-order div {
+  display: grid;
+  gap: .18rem;
+}
+
+.execution-order b {
+  width: fit-content;
+  border-radius: 999px;
+  padding: .15rem .5rem;
+  background: rgba(143, 211, 202, .28);
+  color: #357f73;
+  font-size: .78rem;
+}
+
+.execution-order strong,
+.execution-fallbacks strong {
+  color: var(--ink-strong);
+}
+
+.execution-order small,
+.execution-order p,
+.execution-fallbacks p {
+  margin: 0;
+  color: #6b5b51;
+  font-size: .84rem;
+  line-height: 1.45;
+}
+
+.execution-order > span {
+  color: #557be6;
+  font-size: .8rem;
+  font-weight: 800;
+}
+
+.execution-order p {
+  grid-column: 1 / -1;
+}
+
+.execution-fallbacks h2 {
+  margin: .35rem 0 0;
+  color: var(--ink-strong);
+  font-size: 1rem;
 }
 
 .memory-grid {

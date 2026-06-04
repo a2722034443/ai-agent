@@ -95,7 +95,7 @@ public class IntentParserAgent {
         boolean friends = containsAny(text, "朋友", "好友", "同学", "同事", "聚会", "团建");
         boolean couple = containsAny(text, "情侣", "约会", "对象", "女朋友", "男朋友", "夫妻");
         boolean solo = containsAny(text, "我自己", "一个人", "独自", "单人", "无同行人", "没有同行人", "就我", "只有我")
-                || (!family && !friends && !couple && containsAny(text, "我现在在", "我在", "我周末去", "我想去", "我去", "只有3小时", "只有 3 小时"));
+                || (!family && !friends && !couple && containsAny(text, "我现在在", "我在", "我周末去", "我今天", "我想", "我想去", "我去", "只有3小时", "只有 3 小时"));
         boolean lowCal = containsAny(text, "减肥", "低卡", "清淡", "轻食", "不吃辣", "忌口", "过敏");
         boolean nearby = containsAny(text, "附近", "不要太远", "别离家太远", "步行距离短", "少走路", "顺路", "不要绕路", "不用绕");
 
@@ -136,6 +136,8 @@ public class IntentParserAgent {
         intent.put("soft_preferences", preferences);
         intent.put("requestedPlanCount", extractRequestedPlanCount(text));
         intent.put("requestedStopCount", extractRequestedStopCount(text));
+        intent.put("explicitPois", extractExplicitPois(text));
+        intent.put("executionRequests", extractExecutionRequests(text));
         intent.put("rawMessage", text);
         intent.put("poiSearchStrategy", defaultPoiSearchStrategy(intent));
         intent.put("confidence", 0.55);
@@ -171,6 +173,7 @@ public class IntentParserAgent {
     private Map<String, Object> defaultPoiSearchStrategy(Map<String, Object> intent) {
         String scenario = String.valueOf(intent.getOrDefault("scenario", "unknown"));
         List<String> hard = castStringList(intent.get("hard_constraints"));
+        List<String> explicitPoiNames = explicitPoiNames(intent.get("explicitPois"));
         Map<String, Object> preferences = mutableMap(intent.get("soft_preferences"));
         String vibe = String.valueOf(preferences.getOrDefault("vibe", ""));
         String sourceText = vibe + " " + String.valueOf(intent.getOrDefault("rawMessage", ""));
@@ -210,6 +213,15 @@ public class IntentParserAgent {
         addIfMentioned(sourceText, extra, "咖啡", "咖啡");
         addIfMentioned(sourceText, extra, "老北京酸奶", "老北京酸奶", "酸奶");
         addIfMentioned(sourceText, extra, "龙井", "龙井", "茶");
+        for (String explicitPoi : explicitPoiNames) {
+            if (containsAny(explicitPoi, "餐厅", "海鲜", "火锅", "烤肉", "饭店", "料理", "小吃")) {
+                dining.add(0, explicitPoi);
+            } else if (containsAny(explicitPoi, "咖啡", "茶", "酸奶", "甜品")) {
+                extra.add(0, explicitPoi);
+            } else {
+                activity.add(0, explicitPoi);
+            }
+        }
         if (hard.contains("老人友好") || hard.contains("低步行")) {
             activity.add("室内");
             extra.add("商场");
@@ -300,6 +312,13 @@ public class IntentParserAgent {
         else if (containsAny(text, "下午")) timeWindow.put("period", "下午");
         Integer duration = extractDurationMinutes(text);
         if (duration != null) timeWindow.put("durationMinutes", duration);
+        String explicitEnd = extractExplicitEnd(text, explicitStart);
+        if (explicitEnd != null) {
+            timeWindow.put("end", explicitEnd);
+            if (explicitStart != null) {
+                timeWindow.put("durationMinutes", minutesBetween(explicitStart, explicitEnd));
+            }
+        }
         return timeWindow;
     }
 
@@ -356,6 +375,29 @@ public class IntentParserAgent {
         if (family && total != null) return "家庭亲子";
         if (containsAny(text, "爸妈", "父母")) return "我和父母";
         if (friends && total != null) return "朋友同行";
+        return null;
+    }
+
+    private String extractExplicitEnd(String text, String start) {
+        String value = text == null ? "" : text;
+        java.util.regex.Matcher digital = java.util.regex.Pattern
+                .compile("(?<!\\d)([01]?\\d|2[0-3])\\s*[:.：]\\s*([0-5]\\d)(?!\\d)")
+                .matcher(value);
+        String first = null;
+        while (digital.find()) {
+            String time = String.format("%02d:%s", Integer.parseInt(digital.group(1)), digital.group(2));
+            int from = Math.max(0, digital.start() - 8);
+            int to = Math.min(value.length(), digital.end() + 12);
+            String context = value.substring(from, to);
+            if (containsAny(context, "到家", "回家", "结束", "前", "之前", "以前", "最晚", "要到")) {
+                return time;
+            }
+            if (first == null) {
+                first = time;
+            } else if (start != null && start.equals(first)) {
+                return time;
+            }
+        }
         return null;
     }
 
@@ -431,6 +473,82 @@ public class IntentParserAgent {
         java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(\\d)\\s*(个)?\\s*(地点|地方|POI)").matcher(text);
         if (matcher.find()) return Integer.parseInt(matcher.group(1));
         return null;
+    }
+
+    private List<Map<String, Object>> extractExplicitPois(String text) {
+        String value = text == null ? "" : text;
+        List<Map<String, Object>> pois = new ArrayList<>();
+        addExplicitPoi(pois, extractBetween(value, "先去", "看"), "activity", true);
+        addExplicitPoi(pois, extractBetween(value, "然后去", "吃"), "dining", true);
+        if (containsAny(value, "喝杯咖啡", "喝咖啡", "咖啡店")) {
+            addExplicitPoi(pois, "咖啡店", "extra", false);
+        }
+        java.util.regex.Matcher named = java.util.regex.Pattern
+                .compile("([\\u4e00-\\u9fa5A-Za-z0-9・·\\s()（）-]{2,36}(广场|展馆|博览广场|博物馆|艺术馆|公园|餐厅|海鲜|咖啡店|咖啡))")
+                .matcher(value);
+        while (named.find()) {
+            String name = cleanPoiName(named.group(1));
+            if (name.contains("星海广场") && !name.contains("店")) {
+                continue;
+            }
+            String type = containsAny(name, "餐厅", "海鲜", "饭店") ? "dining"
+                    : containsAny(name, "咖啡") ? "extra" : "activity";
+            addExplicitPoi(pois, name, type, true);
+        }
+        return pois;
+    }
+
+    private String extractBetween(String text, String startToken, String endToken) {
+        int start = text.indexOf(startToken);
+        if (start < 0) return "";
+        int contentStart = start + startToken.length();
+        int end = text.indexOf(endToken, contentStart);
+        if (end < 0 || end <= contentStart) return "";
+        return text.substring(contentStart, end);
+    }
+
+    private void addExplicitPoi(List<Map<String, Object>> pois, String rawName, String type, boolean locked) {
+        String name = cleanPoiName(rawName);
+        if (name.isBlank() || name.length() < 2) return;
+        boolean exists = pois.stream().anyMatch(item -> name.equals(String.valueOf(item.get("name"))));
+        if (exists) return;
+        Map<String, Object> poi = new LinkedHashMap<>();
+        poi.put("name", name);
+        poi.put("type", type);
+        poi.put("locked", locked);
+        pois.add(poi);
+    }
+
+    private String cleanPoiName(String rawName) {
+        String name = rawName == null ? "" : rawName.trim();
+        name = name.replaceAll("^[，,。\\s]+|[，,。\\s]+$", "");
+        name = name.replaceAll("^(先去|然后去|之后去|再去|想先|想去|逛一下|吃一顿|买杯|喝杯)", "");
+        name = name.replace("要到家", "").replace("帮我规划顺路的路线", "");
+        return name.trim();
+    }
+
+    private List<String> explicitPoiNames(Object value) {
+        if (!(value instanceof List<?> list)) return List.of();
+        List<String> names = new ArrayList<>();
+        for (Object item : list) {
+            if (item instanceof Map<?, ?> map) {
+                Object rawName = map.get("name");
+                String name = rawName == null ? "" : String.valueOf(rawName).trim();
+                if (!name.isBlank() && !names.contains(name)) {
+                    names.add(name);
+                }
+            }
+        }
+        return names;
+    }
+
+    private Map<String, Object> extractExecutionRequests(String text) {
+        String value = text == null ? "" : text;
+        Map<String, Object> requests = new LinkedHashMap<>();
+        requests.put("ticket", containsAny(value, "订票", "门票", "买票", "购票"));
+        requests.put("restaurant", containsAny(value, "订座", "订餐", "座位", "预约餐厅"));
+        requests.put("rideHailing", containsAny(value, "叫车", "打车", "提前叫", "回家的车"));
+        return requests;
     }
 
     private String extractLocationHint(String text, String city) {

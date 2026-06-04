@@ -565,8 +565,10 @@ public class ClarificationService {
 
     private boolean isLikelySolo(String text) {
         String value = string(text);
-        return containsAny(value, "我现在在", "只有我", "就我", "我自己", "一个人", "独自")
-                && !containsAny(value, "朋友", "爸妈", "父母", "孩子", "同事", "同学", "老婆", "老公", "对象");
+        boolean hasCompanionSignal = containsAny(value, "朋友", "好友", "爸妈", "父母", "爸爸", "妈妈", "孩子",
+                "小孩", "儿童", "同事", "同学", "老婆", "老公", "对象", "情侣", "夫妻", "家人", "带");
+        return containsAny(value, "只有我", "就我", "我自己", "一个人", "独自", "单人")
+                || (!hasCompanionSignal && containsAny(value, "我现在在", "我今天", "我想", "我想去", "我在", "我去"));
     }
 
     private Integer extractNumber(String text) {
