@@ -248,6 +248,37 @@ class PlanningServiceTest {
     }
 
     @Test
+    void currentLocationCoordinatesCanUseExpandedNearbyRouteWithoutBlocking() {
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                new PlanRequest(
+                        "地点：当前位置 121.767215,39.045065；游玩时长：4小时；同行人：2大1小；预算：400元；开始时间：早上7点",
+                        3,
+                        "标准",
+                        Map.of(
+                                "location", "当前位置 121.767215,39.045065",
+                                "duration", "4小时",
+                                "group", "2大1小",
+                                "budget", "400元",
+                                "timeWindow", "早上7点"
+                        ),
+                        null,
+                        null
+                )
+        );
+
+        assertThat(response.status()).as(response.warnings().toString()).isEqualTo("READY");
+        assertThat(response.options()).isNotEmpty();
+        assertThat(response.intent().get("location").toString())
+                .contains("121.767215", "39.045065", "当前位置");
+        assertThat(response.intent().get("time_window").toString())
+                .contains("start=07:00", "durationMinutes=240");
+        assertThat(response.options().get(0).get("route").toString())
+                .contains("distanceKm", "travelMinutes");
+        assertThat(response.warnings().toString()).contains("扩大搜索范围");
+    }
+
+    @Test
     void functionalAcceptanceMatrixCoversMultiOriginIncidentsDeadlineAndLocationTrust() {
         String message = "今天14:00我和两个朋友在大连星海广场汇合，我在大连世界博览广场，朋友A在星海会展中心，朋友B在大连拿库古典车博览馆，先去大连科学剧场无票看演出，然后去家庭海鲜餐厅满员吃饭，之后喝杯咖啡，17:00要到家，预算900以内，帮我订票订座并提前叫车。";
 

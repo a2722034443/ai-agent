@@ -555,6 +555,8 @@ public class PlanningService {
         Set<String> usedDining = new HashSet<>();
         Set<String> usedExtras = new HashSet<>();
         Integer budgetLimit = budgetLimit(intent);
+        double directRouteLimitKm = directRoutePrefilterKm(intent, candidatePool);
+        double routeDistanceLimitKm = maxRouteDistanceKm(intent, candidatePool);
         int maxAttempts = Math.min(MAX_ROUTE_ATTEMPTS,
                 Math.max(minimumPlanCount, activities.size() * dining.size() * Math.max(1, extras.size())));
         List<StopCandidate> stopCandidates = stopCandidates(planId, activities, dining, extras, stopCount,
@@ -571,7 +573,7 @@ public class PlanningService {
                 continue;
             }
             List<Poi> routeStops = routeStops(origin, stops);
-            if (directRouteDistanceKm(routeStops) > directRoutePrefilterKm(intent)) {
+            if (directRouteDistanceKm(routeStops) > directRouteLimitKm) {
                 tools.recovery(planId, "路线直线距离预筛过远", signature(stops), "跳过该候选");
                 continue;
             }
@@ -589,7 +591,7 @@ public class PlanningService {
                 continue;
             }
             double distanceKm = ((Number) route.getOrDefault("distanceKm", 0)).doubleValue();
-            if (distanceKm > maxRouteDistanceKm(intent)) {
+            if (distanceKm > routeDistanceLimitKm) {
                 tools.recovery(planId, "路线距离过远", signature, "跳过该候选");
                 continue;
             }
@@ -1998,12 +2000,28 @@ public class PlanningService {
         };
     }
 
+    private double maxRouteDistanceKm(Map<String, Object> intent, CandidatePool candidatePool) {
+        double base = maxRouteDistanceKm(intent);
+        if (candidatePool == null || !candidatePool.expanded()) {
+            return base;
+        }
+        return Math.max(base, candidatePool.radiusKm() * 2.2);
+    }
+
     private double directRoutePrefilterKm(Map<String, Object> intent) {
         return switch (transportProfile(intent)) {
             case "walking" -> WALKING_DIRECT_PREFILTER_KM;
             case "driving" -> DRIVING_DIRECT_PREFILTER_KM;
             default -> MIXED_DIRECT_PREFILTER_KM;
         };
+    }
+
+    private double directRoutePrefilterKm(Map<String, Object> intent, CandidatePool candidatePool) {
+        double base = directRoutePrefilterKm(intent);
+        if (candidatePool == null || !candidatePool.expanded()) {
+            return base;
+        }
+        return Math.max(base, candidatePool.radiusKm() * 2.0);
     }
 
     private String transportProfile(Map<String, Object> intent) {
