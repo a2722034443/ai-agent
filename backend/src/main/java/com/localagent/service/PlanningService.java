@@ -141,6 +141,16 @@ public class PlanningService {
             intent = clarificationService.mergeAnswers(intent, request == null ? null : request.clarificationAnswers());
             applyRequestPreferences(intent, request);
             ensurePoiSearchStrategy(intent);
+            Map<String, Object> acceptanceBlock = functionalAcceptanceBlock(session.getId(), intent, message);
+            if (!acceptanceBlock.isEmpty()) {
+                session.markBlocked(toJson(intent), toJson(acceptanceBlock));
+                planSessionRepository.save(session);
+                ChatMessage assistant = historyService.appendAssistant(thread.getId(), session.getId(), parentPlanSessionId,
+                        ChatMessageKind.ASSISTANT_ERROR,
+                        String.valueOf(acceptanceBlock.getOrDefault("message", "这个行程暂时不可行，我已经标出原因。")),
+                        planResultPayload(session.getId(), intent, acceptanceBlock, Map.of(), "chat", "blocked", null));
+                return toResponse(session.getId(), assistant.getId());
+            }
             Map<String, Object> clarification = clarificationService.buildClarification(session.getId(), intent, message);
             if (!clarification.isEmpty()) {
                 Map<String, Object> result = new LinkedHashMap<>();
@@ -506,7 +516,9 @@ public class PlanningService {
     private List<Map<String, Object>> buildOptions(UUID planId, Map<String, Object> intent, List<Poi> candidates,
                                                    Map<String, Object> weather, List<Map<String, Object>> warnings) {
         if (hasCompleteExplicitPoiRoute(intent)) {
-            return buildExplicitPoiOptions(planId, intent, candidates, weather);
+            List<Map<String, Object>> explicitOptions = buildExplicitPoiOptions(planId, intent, candidates, weather);
+            explicitOptions.forEach(option -> enrichFunctionalAcceptanceFields(option, intent));
+            return explicitOptions;
         }
         CandidatePool candidatePool = nearbyCandidates(candidates, intent);
         List<Poi> nearby = candidatePool.pois();
@@ -606,8 +618,87 @@ public class PlanningService {
             int newRank = index + 1;
             sorted.get(index).put("rank", newRank);
             enrichCardContent(sorted.get(index), intent, newRank);
+            enrichFunctionalAcceptanceFields(sorted.get(index), intent);
         }
         return sorted;
+    }
+
+    private Map<String, Object> functionalAcceptanceBlock(UUID planId, Map<String, Object> intent, String message) {
+        List<String> cities = citySignals(intent, message);
+        if (cities.size() < 2) {
+            return Map.of();
+        }
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("provider", "local");
+        output.put("mode", "rule");
+        output.put("sourceUrl", "functional-acceptance-gate");
+        output.put("externalStatus", "CROSS_CITY");
+        output.put("cities", cities);
+        output.put("reason", "短时本地路线不能把多个城市硬串联成顺路行程。");
+        toolTraceService.trace(planId, "FunctionalAcceptanceGate", "CROSS_CITY", System.currentTimeMillis(),
+                Map.of("message", message == null ? "" : message), output);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        String cityText = String.join("、", cities);
+        result.put("options", List.of());
+        result.put("warnings", List.of(warning("跨城市行程不可行",
+                "这次请求同时包含 " + cityText + "，不符合本地短时顺路规划；建议先选择一个城市生成方案。")));
+        result.put("message", "这次行程包含跨城市硬约束，无法作为本地短时路线直接生成。");
+        result.put("blockedCode", "CROSS_CITY");
+        result.put("weather", Map.of());
+        result.put("generationMode", "functional_acceptance_gate");
+        return result;
+    }
+
+    private List<String> citySignals(Map<String, Object> intent, String message) {
+        List<String> cities = new ArrayList<>(castStringList(intent.get("citySignals")));
+        String value = message == null ? "" : message;
+        for (String city : List.of("北京", "上海", "天津", "重庆", "广州", "深圳", "杭州", "南京", "苏州", "成都",
+                "武汉", "西安", "长沙", "郑州", "青岛", "厦门", "大连", "沈阳", "哈尔滨")) {
+            if (value.contains(city) && !cities.contains(city)) {
+                cities.add(city);
+            }
+        }
+        return cities.stream().distinct().limit(4).toList();
+    }
+
+    private void enrichFunctionalAcceptanceFields(Map<String, Object> option, Map<String, Object> intent) {
+        Map<String, Object> multiOrigin = castMap(intent.get("multiOrigin"));
+        Map<String, Object> locationTrust = castMap(intent.get("locationTrust"));
+        if (!multiOrigin.isEmpty()) {
+            option.put("multiOrigin", multiOrigin);
+        }
+        if (!locationTrust.isEmpty()) {
+            option.put("locationTrust", locationTrust);
+        }
+        List<String> highlights = new ArrayList<>(castStringList(option.get("routeHighlights")));
+        if (!multiOrigin.isEmpty()) {
+            prependUnique(highlights, String.valueOf(multiOrigin.getOrDefault("summary", "多起点汇合已纳入路线")));
+        }
+        if (!locationTrust.isEmpty()) {
+            prependUnique(highlights, "地图坐标可信度：" + locationTrust.getOrDefault("confidence", "")
+                    + "，" + locationTrust.getOrDefault("reason", ""));
+        }
+        if (!highlights.isEmpty()) {
+            option.put("routeHighlights", highlights);
+        }
+        List<String> fitReasons = new ArrayList<>(castStringList(option.get("fitReasons")));
+        if (!multiOrigin.isEmpty()) {
+            prependUnique(fitReasons, "已把多起点汇合纳入执行动作，确认后会先模拟接人再进入主行程。");
+        }
+        if (!locationTrust.isEmpty()) {
+            prependUnique(fitReasons, "坐标可信度已标注，地图点位需要以真实地图服务最终核验为准。");
+        }
+        if (!fitReasons.isEmpty()) {
+            option.put("fitReasons", fitReasons);
+        }
+    }
+
+    private void prependUnique(List<String> target, String value) {
+        if (value == null || value.isBlank() || target.contains(value)) {
+            return;
+        }
+        target.add(0, value);
     }
 
     private List<Poi> mergeExplicitPoiCandidates(Map<String, Object> intent, List<Poi> candidates) {
@@ -668,6 +759,7 @@ public class PlanningService {
             route.put("includesOrigin", origin != null);
             route.put("transportStrategy", explicitTransportStrategy(variant));
             route = normalizeExplicitRoute(route, routeStops, variant);
+            route = applyMultiOriginPickupBuffer(route, intent);
             int totalMinutes = tools.totalMinutes(stops, ((Number) route.get("travelMinutes")).intValue());
             boolean timeCompressed = false;
             if (!fitsDuration(intent, totalMinutes)) {
@@ -675,6 +767,11 @@ public class PlanningService {
                 stops = fitExplicitDurationsToWindow(explicitStops, variant,
                         ((Number) route.get("travelMinutes")).intValue(), durationMinutes(intent));
                 totalMinutes = tools.totalMinutes(stops, ((Number) route.get("travelMinutes")).intValue());
+                if (!fitsDuration(intent, totalMinutes)) {
+                    stops = forceFitExplicitDurations(stops, ((Number) route.get("travelMinutes")).intValue(),
+                            durationMinutes(intent));
+                    totalMinutes = tools.totalMinutes(stops, ((Number) route.get("travelMinutes")).intValue());
+                }
                 timeCompressed = true;
             }
             Map<String, Object> option = option(variant, stops, route, totalMinutes, intent, weather);
@@ -719,7 +816,7 @@ public class PlanningService {
         if (windowMinutes <= 0 || stops.isEmpty()) {
             return adjustExplicitDurations(stops, Math.max(variant, 3));
         }
-        int available = Math.max(90, windowMinutes - Math.max(0, travelMinutes));
+        int available = Math.max(stops.size() * 12, windowMinutes - Math.max(0, travelMinutes));
         List<Poi> compact = adjustExplicitDurations(stops, 3);
         int compactStay = compact.stream().mapToInt(Poi::getDurationMinutes).sum();
         if (compactStay <= available) {
@@ -727,9 +824,28 @@ public class PlanningService {
         }
         return compact.stream()
                 .map(poi -> {
-                    int minStay = poi.getType() == PoiType.DINING ? 35 : poi.getType() == PoiType.EXTRA ? 15 : 35;
+                    int minStay = poi.getType() == PoiType.DINING ? 25 : poi.getType() == PoiType.EXTRA ? 10 : 25;
                     int adjusted = Math.max(minStay,
                             (int) Math.floor(poi.getDurationMinutes() * (available / (double) compactStay)));
+                    return poiWithDuration(poi, adjusted);
+                })
+                .toList();
+    }
+
+    private List<Poi> forceFitExplicitDurations(List<Poi> stops, int travelMinutes, int windowMinutes) {
+        int available = windowMinutes - Math.max(0, travelMinutes);
+        if (available <= 0 || stops.isEmpty()) {
+            return stops;
+        }
+        int currentStay = stops.stream().mapToInt(Poi::getDurationMinutes).sum();
+        if (currentStay <= available) {
+            return stops;
+        }
+        double ratio = available / (double) currentStay;
+        return stops.stream()
+                .map(poi -> {
+                    int minStay = poi.getType() == PoiType.DINING ? 18 : poi.getType() == PoiType.EXTRA ? 8 : 18;
+                    int adjusted = Math.max(minStay, (int) Math.floor(poi.getDurationMinutes() * ratio));
                     return poiWithDuration(poi, adjusted);
                 })
                 .toList();
@@ -781,6 +897,24 @@ public class PlanningService {
         normalized.put("routeModes", routeModes);
         normalized.put("source", String.valueOf(route.getOrDefault("source", "")) + "+explicit_strategy");
         return normalized;
+    }
+
+    private Map<String, Object> applyMultiOriginPickupBuffer(Map<String, Object> route, Map<String, Object> intent) {
+        Map<String, Object> multiOrigin = castMap(intent.get("multiOrigin"));
+        if (multiOrigin.isEmpty()) {
+            return route;
+        }
+        int participants = castList(multiOrigin.get("participants")).size();
+        if (participants < 2) {
+            return route;
+        }
+        Map<String, Object> adjusted = new LinkedHashMap<>(route);
+        int pickupMinutes = Math.min(35, 10 + participants * 6);
+        int travelMinutes = intValue(adjusted.get("travelMinutes")) == null ? 0 : intValue(adjusted.get("travelMinutes"));
+        adjusted.put("travelMinutes", travelMinutes + pickupMinutes);
+        adjusted.put("multiOriginPickupMinutes", pickupMinutes);
+        adjusted.put("source", String.valueOf(route.getOrDefault("source", "")) + "+multi_origin_pickup");
+        return adjusted;
     }
 
     private int explicitSegmentMinutes(double distanceKm, int variant) {

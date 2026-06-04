@@ -201,6 +201,48 @@ class PlanningServiceTest {
     }
 
     @Test
+    void functionalAcceptanceMatrixCoversMultiOriginIncidentsDeadlineAndLocationTrust() {
+        String message = "今天14:00我和两个朋友在大连星海广场汇合，我在大连世界博览广场，朋友A在星海会展中心，朋友B在大连拿库古典车博览馆，先去大连科学剧场无票看演出，然后去家庭海鲜餐厅满员吃饭，之后喝杯咖啡，17:00要到家，预算900以内，帮我订票订座并提前叫车。";
+
+        PlanResponse response = planningService.createPlan("test-token", message);
+
+        assertThat(response.status()).as(response.clarification().toString()).isEqualTo("READY");
+        assertThat(response.intent().get("group").toString()).contains("total=3", "朋友同行");
+        assertThat(response.intent().toString())
+                .contains("multiOrigin")
+                .contains("大连世界博览广场", "星海会展中心", "大连拿库古典车博览馆")
+                .contains("locationTrust", "confidence", "reason");
+        assertThat(response.options()).hasSize(3);
+        assertThat(response.options().get(0).toString())
+                .contains("多起点汇合", "TIME_CONFLICT", "大连科学剧场无票", "家庭海鲜餐厅满员");
+        assertThat(response.options().get(0).get("timeline").toString())
+                .contains("咖啡店")
+                .doesNotContain("之后喝杯咖啡");
+        response.options().forEach(option -> {
+            assertThat((Integer) option.get("totalMinutes")).isLessThanOrEqualTo(180);
+            assertThat(option.get("routeHighlights").toString()).contains("多起点汇合", "坐标");
+        });
+
+        PlanResponse confirmed = planningService.confirm(response.planId(), 1);
+        assertThat(confirmed.execution().get("incidents").toString())
+                .contains("NO_TICKET", "NO_SEAT", "TIME_CONFLICT");
+        assertThat(confirmed.execution().get("executionSteps").toString())
+                .contains("多起点接人", "打车", "购票", "订座");
+    }
+
+    @Test
+    void functionalAcceptanceMatrixBlocksCrossCityRouteInsteadOfPretendingFeasible() {
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                "今天14:00我和朋友在上海人民广场碰面，但还想顺路去北京故宫看展，然后回上海吃小杨生煎，18:00结束，预算800元，两个人。"
+        );
+
+        assertThat(response.status()).isEqualTo("BLOCKED");
+        assertThat(response.warnings().toString()).contains("跨城市", "上海", "北京");
+        assertThat(response.trace().toString()).contains("CROSS_CITY");
+    }
+
+    @Test
     void returnsAvailableRealisticOptionsWhenRequestedCountIsTooHigh() {
         PlanResponse response = planningService.createPlan(
                 "test-token",

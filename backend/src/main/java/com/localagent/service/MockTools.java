@@ -136,6 +136,18 @@ public class MockTools {
         List<Map<String, Object>> incidents = new ArrayList<>();
         List<Map<String, Object>> fallbackOptions = new ArrayList<>();
 
+        Map<String, Object> multiOrigin = castMap(option.get("multiOrigin"));
+        if (!multiOrigin.isEmpty()) {
+            steps.add(Map.of(
+                    "name", "多起点接人已安排",
+                    "action", "multi_origin_pickup",
+                    "status", "done",
+                    "provider", "mock",
+                    "mode", "mock",
+                    "message", String.valueOf(multiOrigin.getOrDefault("summary", "多起点汇合接人已纳入模拟执行。"))
+            ));
+        }
+
         Map<String, Object> ride = rideOrder(planId, option, timeline);
         orders.add(ride);
         steps.add(step("打车已模拟叫车", ride, "从出发地到首个地点，费用和车牌均为 Mock 演示。"));
@@ -347,6 +359,11 @@ public class MockTools {
     @SuppressWarnings("unchecked")
     private List<Map<String, Object>> castList(Object value) {
         return value instanceof List<?> list ? (List<Map<String, Object>>) list : List.of();
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> castMap(Object value) {
+        return value instanceof Map<?, ?> ? (Map<String, Object>) value : Map.of();
     }
 
     private Map<String, Object> fallback(Map<String, Object> incident) {
