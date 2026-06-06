@@ -3,6 +3,7 @@ package com.localagent.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -334,19 +335,31 @@ public class IntentParserAgent {
 
     private List<String> extractCityMentions(String text) {
         String value = text == null ? "" : text;
-        List<String> cities = new ArrayList<>();
+        List<CityReference> references = new ArrayList<>();
         java.util.regex.Matcher explicit = java.util.regex.Pattern
                 .compile("([\\u4e00-\\u9fa5]{2,12}?)(市)")
                 .matcher(value);
         while (explicit.find()) {
-            String city = explicit.group(1);
-            if (!cities.contains(city)) {
-                cities.add(city);
-            }
+            references.add(new CityReference(explicit.group(1), explicit.start(1)));
         }
         for (String city : knownCities()) {
-            if (value.contains(city) && !cities.contains(city)) {
-                cities.add(city);
+            int from = 0;
+            while (from < value.length()) {
+                int index = value.indexOf(city, from);
+                if (index < 0) {
+                    break;
+                }
+                if (isExplicitCityMention(value, index, city)) {
+                    references.add(new CityReference(city, index));
+                }
+                from = index + city.length();
+            }
+        }
+        references.sort(Comparator.comparingInt(CityReference::index));
+        List<String> cities = new ArrayList<>();
+        for (CityReference reference : references) {
+            if (!cities.contains(reference.name())) {
+                cities.add(reference.name());
             }
         }
         return cities;
@@ -355,6 +368,7 @@ public class IntentParserAgent {
     private Map<String, Object> extractMultiOrigin(String text) {
         String value = text == null ? "" : text;
         List<Map<String, Object>> participants = new ArrayList<>();
+        List<String> overallCities = extractCityMentions(value);
         java.util.regex.Matcher matcher = java.util.regex.Pattern
                 .compile("(我|朋友[A-Za-z0-9一二三四五六七八九十]?|好友[A-Za-z0-9一二三四五六七八九十]?|同事[A-Za-z0-9一二三四五六七八九十]?)[^，,。；;]{0,4}在([^，,。；;]+)")
                 .matcher(value);
@@ -366,7 +380,17 @@ public class IntentParserAgent {
             }
             boolean exists = participants.stream().anyMatch(item -> name.equals(item.get("name")));
             if (!exists) {
-                participants.add(Map.of("name", name, "origin", origin));
+                String city = extractCityHint(origin);
+                if (city.isBlank() && overallCities.size() == 1) {
+                    city = overallCities.get(0);
+                }
+                Map<String, Object> participant = new LinkedHashMap<>();
+                participant.put("name", name);
+                participant.put("origin", origin);
+                if (!city.isBlank()) {
+                    participant.put("city", city);
+                }
+                participants.add(participant);
             }
         }
         if (participants.size() < 2) {
@@ -758,15 +782,7 @@ public class IntentParserAgent {
     }
 
     private String extractCityHint(String text) {
-        String value = text == null ? "" : text;
-        java.util.regex.Matcher explicit = java.util.regex.Pattern
-                .compile("([\\u4e00-\\u9fa5]{2,12}?)(市)")
-                .matcher(value);
-        if (explicit.find()) return explicit.group(1);
-        for (String city : knownCities()) {
-            if (value.contains(city)) return city;
-        }
-        return "";
+        return extractCityMentions(text).stream().findFirst().orElse("");
     }
 
     private List<String> knownCities() {
@@ -775,6 +791,45 @@ public class IntentParserAgent {
                 "长沙", "郑州", "青岛", "济南", "厦门", "福州", "宁波", "无锡", "合肥", "昆明", "南昌", "南宁",
                 "贵阳", "太原", "石家庄", "沈阳", "长春", "哈尔滨", "大连", "珠海", "佛山", "东莞", "泉州",
                 "洛阳", "海口", "三亚", "乌鲁木齐", "兰州", "银川", "西宁", "拉萨", "呼和浩特");
+    }
+
+    private boolean isExplicitCityMention(String text, int index, String city) {
+        int end = index + city.length();
+        if (!hasCityLeadingBoundary(text, index)) {
+            return false;
+        }
+        if (end < text.length() && text.charAt(end) == '市') {
+            return true;
+        }
+        return !hasCitySuffixExclusion(text, end);
+    }
+
+    private boolean hasCityLeadingBoundary(String text, int index) {
+        if (index <= 0) {
+            return true;
+        }
+        char previous = text.charAt(index - 1);
+        if (Character.isWhitespace(previous) || isBoundaryPunctuation(previous)) {
+            return true;
+        }
+        return "在去回到来从往离住于向至跟和与同陪约赴经返".indexOf(previous) >= 0;
+    }
+
+    private boolean hasCitySuffixExclusion(String text, int start) {
+        if (start >= text.length()) {
+            return false;
+        }
+        for (String suffix : List.of("路", "街", "巷", "大道", "胡同", "弄", "号", "店",
+                "餐厅", "饭店", "酒店", "宾馆", "公馆", "菜馆", "小吃", "烤鸭", "生煎", "火锅", "酸奶")) {
+            if (text.startsWith(suffix, start)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean isBoundaryPunctuation(char ch) {
+        return ",，。；;、()（）:：- ".indexOf(ch) >= 0;
     }
 
     private double[] parseCoordinates(String text) {
@@ -863,4 +918,6 @@ public class IntentParserAgent {
     private String safeReason(Exception e) {
         return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
     }
+
+    private record CityReference(String name, int index) {}
 }

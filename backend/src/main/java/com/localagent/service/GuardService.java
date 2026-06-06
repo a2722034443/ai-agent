@@ -30,11 +30,12 @@ public class GuardService {
     }
 
     @Transactional(readOnly = true)
-    public Map<String, Object> status(UUID planId) {
+    public Map<String, Object> status(UUID planId, String sessionToken) {
         if (planId == null) {
             return legacyMockStatus();
         }
-        PlanSession session = planSessionRepository.findById(planId).orElseThrow(NoSuchElementException::new);
+        PlanSession session = planSessionRepository.findByIdAndSessionToken(planId, sessionToken)
+                .orElseThrow(NoSuchElementException::new);
         Map<String, Object> result = fromJson(session.getResultJson());
         Map<String, Object> execution = fromJson(session.getExecutionJson());
         Map<String, Object> option = selectedOption(planId, execution);

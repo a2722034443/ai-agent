@@ -165,8 +165,10 @@ public class ApiController {
     }
 
     @GetMapping("/guard/status")
-    public Map<String, Object> guardStatus(@RequestParam(required = false) UUID planId) {
-        return guardService.status(planId);
+    public Map<String, Object> guardStatus(@RequestHeader("X-Session-Token") String token,
+                                           @RequestParam(required = false) UUID planId) {
+        sessionService.validate(token);
+        return guardService.status(planId, token);
     }
 
     @PostMapping("/speech/transcribe")
