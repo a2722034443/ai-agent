@@ -649,6 +649,53 @@ class ApiControllerTest {
     }
 
     @Test
+    void guardStatusRejectsInvalidSessionToken() throws Exception {
+        when(redisTemplate.hasKey(anyString())).thenReturn(false);
+
+        mockMvc.perform(get("/api/guard/status")
+                        .header("X-Session-Token", "missing")
+                        .param("planId", UUID.randomUUID().toString()))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").exists());
+    }
+
+    @Test
+    void guardStatusDoesNotExposeAnotherSessionsPlan() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+
+        MvcResult ownerSession = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"owner\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String ownerToken = extractJsonString(ownerSession, "token");
+
+        MvcResult otherSession = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"other\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String otherToken = extractJsonString(otherSession, "token");
+
+        MvcResult planResult = mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", ownerToken)
+                        .contentType("application/json")
+                        .content("{\"message\":\"今天下午2点在大连星海广场附近，两个大人一个孩子，预算600元，想安排亲子活动和晚餐，时间4小时左右\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("READY"))
+                .andReturn();
+        String planId = extractPlanId(planResult);
+
+        mockMvc.perform(get("/api/guard/status")
+                        .header("X-Session-Token", otherToken)
+                        .param("planId", planId))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.status").value("NOT_FOUND"));
+    }
+
+    @Test
     void storesMessageLevelHistoryAndSupportsRenameDelete() throws Exception {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.hasKey(anyString())).thenReturn(true);

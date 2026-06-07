@@ -824,7 +824,7 @@ public class PlanningService {
     }
 
     private Map<String, Object> functionalAcceptanceBlock(UUID planId, Map<String, Object> intent, String message) {
-        List<String> cities = citySignals(intent, message);
+        List<String> cities = citySignals(intent);
         if (cities.size() < 2) {
             return Map.of();
         }
@@ -850,16 +850,24 @@ public class PlanningService {
         return result;
     }
 
-    private List<String> citySignals(Map<String, Object> intent, String message) {
-        List<String> cities = new ArrayList<>(castStringList(intent.get("citySignals")));
-        String value = message == null ? "" : message;
-        for (String city : List.of("北京", "上海", "天津", "重庆", "广州", "深圳", "杭州", "南京", "苏州", "成都",
-                "武汉", "西安", "长沙", "郑州", "青岛", "厦门", "大连", "沈阳", "哈尔滨")) {
-            if (containsCitySignal(value, city) && !cities.contains(city)) {
-                cities.add(city);
-            }
+    private List<String> citySignals(Map<String, Object> intent) {
+        List<String> cities = new ArrayList<>();
+        addDistinctCity(cities, castMap(intent.get("location")).get("city"));
+        for (String city : castStringList(intent.get("citySignals"))) {
+            addDistinctCity(cities, city);
         }
-        return cities.stream().distinct().limit(4).toList();
+        Map<String, Object> multiOrigin = castMap(intent.get("multiOrigin"));
+        for (Map<String, Object> participant : castList(multiOrigin.get("participants"))) {
+            addDistinctCity(cities, participant.get("city"));
+        }
+        return cities.stream().limit(4).toList();
+    }
+
+    private void addDistinctCity(List<String> cities, Object value) {
+        String city = stringValue(value);
+        if (city != null && !city.isBlank() && !cities.contains(city)) {
+            cities.add(city);
+        }
     }
 
     private boolean containsCitySignal(String message, String city) {

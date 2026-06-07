@@ -382,6 +382,19 @@ class PlanningServiceTest {
     }
 
     @Test
+    void cityNamedRoadDoesNotTriggerCrossCityBlock() {
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                "今天14:00在广州北京路附近和3个朋友逛展再吃饭，预算500元，玩3小时，路线顺一点。"
+        );
+
+        assertThat(response.status()).isEqualTo("READY");
+        assertThat(response.intent().get("location").toString()).contains("city=广州");
+        assertThat(response.warnings().toString()).doesNotContain("跨城市");
+        assertThat(response.trace().toString()).doesNotContain("CROSS_CITY");
+    }
+
+    @Test
     void returnsAvailableRealisticOptionsWhenRequestedCountIsTooHigh() {
         PlanResponse response = planningService.createPlan(
                 "test-token",
