@@ -18,3 +18,4 @@ external-repos/
 *.bak
 .claude/
 .codex-temp/
+.codex
