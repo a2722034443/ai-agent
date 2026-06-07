@@ -50,7 +50,8 @@ public class PlanningService {
     private static final double WALKING_DIRECT_PREFILTER_KM = 4.0;
     private static final double MIXED_DIRECT_PREFILTER_KM = 12.5;
     private static final double DRIVING_DIRECT_PREFILTER_KM = 28.0;
-    private static final int MAX_ROUTE_ATTEMPTS = 12;
+    private static final int MAX_ROUTE_ATTEMPTS = 8;
+    private static final int MAX_STOP_CANDIDATES = 18;
 
     private final PlanSessionRepository planSessionRepository;
     private final PlanOptionRepository planOptionRepository;
@@ -245,7 +246,61 @@ public class PlanningService {
         if ("rule-only".equalsIgnoreCase(mode)) {
             return intentParserAgent.fastParse(planId, message);
         }
+        Map<String, Object> ruleIntent = intentParserAgent.keywordFallback(message);
+        if (shouldClarifyWithoutLlm(ruleIntent)) {
+            toolTraceService.trace(planId, "IntentParserAgent", "ok", System.currentTimeMillis(),
+                    Map.of("message", message == null ? "" : message),
+                    Map.of("provider", "local", "mode", "rule-precheck",
+                            "reason", "hard_fields_need_user_input",
+                            "scenario", ruleIntent.get("scenario")));
+            return ruleIntent;
+        }
         return intentParserAgent.parse(planId, message);
+    }
+
+    private boolean shouldClarifyWithoutLlm(Map<String, Object> intent) {
+        Map<String, Object> location = castMap(intent.get("location"));
+        Map<String, Object> timeWindow = castMap(intent.get("time_window"));
+        Map<String, Object> group = castMap(intent.get("group"));
+        Map<String, Object> preferences = castMap(intent.get("soft_preferences"));
+        if (locationUsesNearbyWithoutConcreteAnchor(location)) {
+            return true;
+        }
+        boolean hasLocation = hasConcreteLocationSignal(location);
+        boolean hasStart = hasUsefulValue(timeWindow.get("start"));
+        boolean hasDurationOrEnd = hasUsefulValue(timeWindow.get("durationMinutes")) || hasUsefulValue(timeWindow.get("end"));
+        boolean hasGroup = hasUsefulValue(group.get("total")) || hasUsefulValue(group.get("composition"));
+        boolean hasBudget = hasUsefulValue(preferences.get("budgetAmount")) || hasUsefulValue(preferences.get("budget"));
+        return hasLocation && hasStart && hasGroup && hasBudget && !hasDurationOrEnd;
+    }
+
+    private boolean locationUsesNearbyWithoutConcreteAnchor(Map<String, Object> location) {
+        String radius = cleanSignal(location.get("radius"));
+        return "nearby".equalsIgnoreCase(radius) && !hasConcreteLocationSignal(location);
+    }
+
+    private boolean hasConcreteLocationSignal(Map<String, Object> location) {
+        if (location.get("lng") instanceof Number && location.get("lat") instanceof Number) {
+            return true;
+        }
+        String city = cleanSignal(location.get("city"));
+        String district = cleanSignal(location.get("district"));
+        if (city.isBlank() && district.isBlank()) {
+            return false;
+        }
+        if (Boolean.TRUE.equals(location.get("needsConcreteAnchor"))) {
+            return false;
+        }
+        String combined = city + district;
+        return combined.length() >= 2 && !List.of("附近", "当前位置", "本地", "周边").contains(combined);
+    }
+
+    private String cleanSignal(Object value) {
+        if (value == null) {
+            return "";
+        }
+        String text = String.valueOf(value).trim();
+        return "null".equalsIgnoreCase(text) ? "" : text;
     }
 
     private boolean shouldSkipIntentParse(PlanRequest request) {
@@ -559,8 +614,7 @@ public class PlanningService {
         double directRouteLimitKm = directRoutePrefilterKm(intent, candidatePool);
         double routeDistanceLimitKm = maxRouteDistanceKm(intent, candidatePool);
         double fallbackRouteLimitKm = fallbackRouteDistanceKm(intent, candidatePool, routeDistanceLimitKm);
-        int maxAttempts = Math.min(MAX_ROUTE_ATTEMPTS,
-                Math.max(minimumPlanCount, activities.size() * dining.size() * Math.max(1, extras.size())));
+        int maxAttempts = Math.min(MAX_ROUTE_ATTEMPTS, Math.max(minimumPlanCount, planCount * 3));
         List<StopCandidate> stopCandidates = stopCandidates(planId, activities, dining, extras, stopCount,
                 durationMinutes(intent), intent);
         List<RouteFallbackCandidate> routeFallbacks = new ArrayList<>();
@@ -602,9 +656,19 @@ public class PlanningService {
                     stops = extendFlexibleStop(stops, durationMinutes(intent) - totalMinutes);
                     totalMinutes = tools.totalMinutes(stops, ((Number) route.get("travelMinutes")).intValue());
                 }
-                if (distanceKm <= fallbackRouteLimitKm && fitsDuration(intent, totalMinutes)) {
-                    routeFallbacks.add(new RouteFallbackCandidate(stops, route, totalMinutes, candidate,
-                            distanceKm, routeDistanceLimitKm));
+                if (distanceKm <= fallbackRouteLimitKm) {
+                    List<Poi> fallbackStops = stops;
+                    int fallbackTotalMinutes = totalMinutes;
+                    if (!fitsDuration(intent, fallbackTotalMinutes) && hasExplicitEnd(intent)) {
+                        fallbackStops = forceFitStopDurations(stops,
+                                ((Number) route.get("travelMinutes")).intValue(), durationMinutes(intent));
+                        fallbackTotalMinutes = tools.totalMinutes(fallbackStops,
+                                ((Number) route.get("travelMinutes")).intValue());
+                    }
+                    if (fitsDuration(intent, fallbackTotalMinutes)) {
+                        routeFallbacks.add(new RouteFallbackCandidate(fallbackStops, route, fallbackTotalMinutes, candidate,
+                                distanceKm, routeDistanceLimitKm));
+                    }
                 }
                 continue;
             }
@@ -684,11 +748,11 @@ public class PlanningService {
                                                int stopCount, int durationMinutes, Map<String, Object> intent) {
         List<StopCandidate> candidates = new ArrayList<>();
         int offset = 0;
-        for (int diningOffset = 0; diningOffset < dining.size(); diningOffset++) {
+        for (int diningOffset = 0; diningOffset < dining.size() && candidates.size() < MAX_STOP_CANDIDATES; diningOffset++) {
             Poi restaurant = chooseRestaurant(planId, dining, diningOffset);
-            for (int extraOffset = 0; extraOffset < extras.size(); extraOffset++) {
+            for (int extraOffset = 0; extraOffset < extras.size() && candidates.size() < MAX_STOP_CANDIDATES; extraOffset++) {
                 Poi extra = extras.get(extraOffset);
-                for (int activityOffset = 0; activityOffset < activities.size(); activityOffset++) {
+                for (int activityOffset = 0; activityOffset < activities.size() && candidates.size() < MAX_STOP_CANDIDATES; activityOffset++) {
                     Poi activity = chooseActivity(planId, activities, activityOffset);
                     if (extra.getName().equals(activity.getName()) || extra.getName().equals(restaurant.getName())) {
                         continue;
@@ -1230,7 +1294,7 @@ public class PlanningService {
             option.put("name", "轻松少走朋友局");
             option.put("tag", "少折腾");
             option.put("tagline", routeShape + "，优先选近场点位，吃饭前后都留缓冲，适合朋友慢慢碰头。");
-            option.put("executionList", List.of("普通入场/取号", "靠里安静座", "必要时短驳打车", "天气提醒"));
+            option.put("executionList", List.of("Mock 购票/取号", "Mock 订座：靠里安静座", "Mock 打车：必要时短驳", "天气提醒"));
             prependUnique(reasons, "策略差异：轻松版优先压低步行和换乘压力，餐厅座位偏安静好聊天。");
             prependUnique(risks, "餐厅若临时满员，执行中心会优先找同区域同预算替代。");
         } else if (rank == 2) {
@@ -1239,7 +1303,7 @@ public class PlanningService {
             option.put("name", "热闹有趣小聚线");
             option.put("tag", "朋友小聚");
             option.put("tagline", routeShape + "，把更有社交感的活动放前面，吃饭承接聊天，收尾点适合继续坐一会儿。");
-            option.put("executionList", List.of("活动提前确认", "四人桌预留", "排队提醒", "聚会分享消息"));
+            option.put("executionList", List.of("Mock 购票：活动提前确认", "Mock 订座：四人桌预留", "排队提醒", "聚会分享消息"));
             prependUnique(reasons, "策略差异：热闹版优先朋友互动和活动记忆点，不靠改 POI 后缀凑方案。");
             prependUnique(risks, "热闹型点位晚高峰可能排队，建议确认后提前取号。");
         } else {
@@ -1248,7 +1312,7 @@ public class PlanningService {
             option.put("name", "高效顺路收口线");
             option.put("tag", "高效顺路");
             option.put("tagline", routeShape + "，路线更紧凑，必要时用短驳车收口，适合不想在路上消耗太多。");
-            option.put("executionList", List.of("快速入场确认", "优先座/四人桌", "短驳打车", "路线异常提醒"));
+            option.put("executionList", List.of("Mock 购票：快速入场确认", "Mock 订座：优先座/四人桌", "Mock 打车：短驳收口", "路线异常提醒"));
             prependUnique(reasons, "策略差异：高效版优先路线闭环和晚间回程确定性，时间分配更紧凑。");
             prependUnique(risks, "节奏更紧，活动或用餐延时会压缩最后一站。");
         }
@@ -2223,7 +2287,9 @@ public class PlanningService {
             return "walking";
         }
         if (text.contains("\u5f00\u8f66") || text.contains("\u81ea\u9a7e") || text.contains("\u6253\u8f66")
-                || text.contains("\u7f51\u7ea6\u8f66") || text.contains("\u8de8\u533a") || text.contains("\u8fdc\u4e00\u70b9")) {
+                || text.contains("\u53eb\u8f66") || text.contains("\u5b89\u6392\u8f66") || text.contains("\u7528\u8f66")
+                || text.contains("\u63a5\u9001") || text.contains("\u7f51\u7ea6\u8f66") || text.contains("\u8de8\u533a")
+                || text.contains("\u8fdc\u4e00\u70b9")) {
             return "driving";
         }
         return "mixed";

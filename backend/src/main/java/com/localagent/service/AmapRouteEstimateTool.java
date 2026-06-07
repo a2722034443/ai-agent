@@ -21,6 +21,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -33,6 +34,7 @@ public class AmapRouteEstimateTool {
     private static final String BICYCLING_PATH = "/v3/direction/bicycling";
     private static final String DRIVING_PATH = "/v3/direction/driving";
     private static final int MAX_REQUEST_TIMEOUT_MS = 1800;
+    private static final int MAX_ROUTE_TOTAL_TIMEOUT_MS = 2600;
 
     private final ExternalClientProperties properties;
     private final MockTools mockTools;
@@ -43,7 +45,11 @@ public class AmapRouteEstimateTool {
     private final CacheManager cacheManager;
     private final boolean allowMockPoi;
     private final Map<UUID, Map<String, Map<String, Object>>> segmentCaches = new ConcurrentHashMap<>();
-    private final ExecutorService executor = Executors.newCachedThreadPool();
+    private final ExecutorService executor = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "amap-route-segment");
+        t.setDaemon(true);
+        return t;
+    });
 
     public AmapRouteEstimateTool(ExternalClientProperties properties, MockTools mockTools,
                                  ToolTraceService traceService, ObjectMapper objectMapper,
@@ -85,7 +91,13 @@ public class AmapRouteEstimateTool {
                     }, executor));
             }
 
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+            try {
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                        .get(routeTotalTimeoutMs(amap, stops), TimeUnit.MILLISECONDS);
+            } catch (Exception e) {
+                futures.forEach(future -> future.cancel(true));
+                return blockOrMock(planId, stops, "route_total_timeout", BICYCLING_PATH);
+            }
 
             // 先累加秒数，最后统一除以60，避免逐段整除精度损失
             int totalSeconds = 0;
@@ -279,6 +291,12 @@ public class AmapRouteEstimateTool {
 
     private int requestTimeoutMs(ExternalClientProperties.Amap amap) {
         return Math.min(amap.getTimeoutMs(), MAX_REQUEST_TIMEOUT_MS);
+    }
+
+    private int routeTotalTimeoutMs(ExternalClientProperties.Amap amap, List<Poi> stops) {
+        int segments = Math.max(1, stops.size() - 1);
+        int bySegment = requestTimeoutMs(amap) + 250 * segments;
+        return Math.min(MAX_ROUTE_TOTAL_TIMEOUT_MS, Math.max(1200, bySegment));
     }
 
     private RouteMode routeMode(Poi from, Poi to) {

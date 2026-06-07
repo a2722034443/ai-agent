@@ -34,7 +34,11 @@ public class SessionService {
         if (mockSessionStore) {
             localSessions.put(token, expiresAt);
         } else {
-            redisTemplate.opsForValue().set(token, value, Duration.ofHours(ttlHours));
+            try {
+                redisTemplate.opsForValue().set(token, value, Duration.ofHours(ttlHours));
+            } catch (RuntimeException e) {
+                localSessions.put(token, expiresAt);
+            }
         }
         return new SessionResponse(sessionId, token, expiresAt);
     }
@@ -47,7 +51,16 @@ public class SessionService {
             validateLocal(token);
             return;
         }
-        if (Boolean.TRUE.equals(redisTemplate.hasKey(token))) {
+        try {
+            if (Boolean.TRUE.equals(redisTemplate.hasKey(token))) {
+                return;
+            }
+        } catch (RuntimeException e) {
+            validateLocal(token);
+            return;
+        }
+        if (localSessions.containsKey(token)) {
+            validateLocal(token);
             return;
         }
         throw new SessionAuthException("会话已过期或不存在，请重新创建会话");

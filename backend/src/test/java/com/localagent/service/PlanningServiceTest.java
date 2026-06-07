@@ -395,6 +395,50 @@ class PlanningServiceTest {
     }
 
     @Test
+    void constraintEndingWithCityCharacterDoesNotTriggerCrossCityBlock() {
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                "今天10:00在昆明南屏街附近，带奶奶和妈妈，预算600元，奶奶对花粉过敏，不要户外花市，想文化展和云南菜，14:00结束，帮我订座并安排车。"
+        );
+
+        assertThat(response.status()).as(response.clarification().toString()).isEqualTo("READY");
+        assertThat(response.intent().get("location").toString()).contains("city=昆明");
+        assertThat(response.intent().get("citySignals").toString()).contains("昆明").doesNotContain("不要户外花");
+        assertThat(response.intent().get("group").toString()).contains("total=3", "老人");
+        assertThat(response.options()).isNotEmpty();
+        assertThat(response.options().toString()).contains("订座", "打车");
+        assertThat(response.options().toString()).contains("102.").doesNotContain("121.475");
+        assertThat(response.warnings().toString()).doesNotContain("跨城市", "不要户外花");
+        assertThat(response.trace().toString()).doesNotContain("CROSS_CITY");
+    }
+
+    @Test
+    void explicitEndWithRideRequestUsesDrivingProfileInsteadOfMixedRouteBlock() {
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                new PlanRequest(
+                        "地点：当前位置 121.470000,38.883000；游玩时长：4小时；同行人：2大1小；预算：800元；开始时间：早上9点；14:00结束；帮我订座并安排车",
+                        3,
+                        "标准",
+                        Map.of(
+                                "location", "当前位置 121.470000,38.883000",
+                                "duration", "4小时",
+                                "group", "2大1小",
+                                "budget", "800元",
+                                "timeWindow", "早上9点",
+                                "execution", "订座 打车"
+                        ),
+                        null,
+                        null
+                )
+        );
+
+        assertThat(response.status()).as(response.warnings().toString()).isEqualTo("READY");
+        assertThat(response.options().toString()).contains("订座", "打车");
+        assertThat(response.warnings().toString()).doesNotContain("真实地点不足");
+    }
+
+    @Test
     void returnsAvailableRealisticOptionsWhenRequestedCountIsTooHigh() {
         PlanResponse response = planningService.createPlan(
                 "test-token",

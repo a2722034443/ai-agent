@@ -1,6 +1,8 @@
 package com.localagent.controller;
 
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -78,5 +80,32 @@ class IntentParserModeApiTest {
                 .andExpect(jsonPath("$.status").value("READY"))
                 .andExpect(jsonPath("$.intent.confidence").value(0.91))
                 .andExpect(jsonPath("$.trace[?(@.tool=='IntentParserAgent' && @.provider=='mimo' && @.mode=='real')]").exists());
+    }
+
+    @Test
+    void llmFallbackModeSkipsMimoWhenRuleParseAlreadyNeedsClarification() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = sessionResult.getResponse().getContentAsString().split("\"token\":\"")[1].split("\"")[0];
+
+        mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", "client-test")
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content("{\"message\":\"在附近吃点小吃，帮我订座，吃完叫车回家，预算200\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
+                .andExpect(jsonPath("$.clarification.missingFields").isArray())
+                .andExpect(jsonPath("$.clarification.missingFields[?(@=='location')]").exists())
+                .andExpect(jsonPath("$.intent.location.lng").doesNotExist())
+                .andExpect(jsonPath("$.intent.location.lat").doesNotExist());
+
+        verify(mimoClient, never()).completeWithMeta(anyString(), anyString());
     }
 }

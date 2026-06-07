@@ -2,7 +2,7 @@ const BASE_URL = import.meta.env.VITE_API_URL || ''
 const TOKEN_KEY = 'lla_token'
 const CLIENT_KEY = 'lla_client_id'
 const DEFAULT_NICKNAME = '立刻游用户'
-const PLAN_REQUEST_TIMEOUT_MS = 35000
+const PLAN_REQUEST_TIMEOUT_MS = 60000
 
 export function getSessionToken() {
   return localStorage.getItem(TOKEN_KEY) || ''

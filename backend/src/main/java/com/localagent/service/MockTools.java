@@ -94,12 +94,21 @@ public class MockTools {
         if (district.contains("西湖")) return new double[] {120.148, 30.259};
         if (district.contains("春熙路")) return new double[] {104.080, 30.657};
         if (district.contains("南山")) return new double[] {113.930, 22.533};
+        if (district.contains("南屏街")) return new double[] {102.713, 25.042};
         return switch (city) {
             case "上海" -> new double[] {121.475, 31.232};
             case "北京" -> new double[] {116.407, 39.904};
             case "杭州" -> new double[] {120.155, 30.274};
             case "成都" -> new double[] {104.066, 30.572};
             case "深圳" -> new double[] {114.057, 22.543};
+            case "广州" -> new double[] {113.264, 23.129};
+            case "武汉" -> new double[] {114.305, 30.593};
+            case "昆明" -> new double[] {102.713, 25.042};
+            case "南京" -> new double[] {118.796, 32.060};
+            case "西安" -> new double[] {108.940, 34.341};
+            case "长沙" -> new double[] {112.939, 28.228};
+            case "重庆" -> new double[] {106.551, 29.563};
+            case "苏州" -> new double[] {120.585, 31.299};
             default -> new double[] {121.475, 31.232};
         };
     }

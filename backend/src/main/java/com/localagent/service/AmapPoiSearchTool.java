@@ -23,6 +23,8 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
@@ -40,6 +42,7 @@ public class AmapPoiSearchTool {
     private static final int AROUND_RADIUS = 8000;
     private static final int MIN_DEDUPED_SIZE = 9;
     private static final int MAX_REQUEST_TIMEOUT_MS = 1800;
+    private static final int MAX_POI_SEARCH_TOTAL_TIMEOUT_MS = 4500;
 
     private final ExternalClientProperties properties;
     private final MockTools mockTools;
@@ -49,7 +52,11 @@ public class AmapPoiSearchTool {
     private final HttpClient httpClient;
     private final CacheManager cacheManager;
     private final boolean allowMockPoi;
-    private final ExecutorService executor = Executors.newCachedThreadPool();
+    private final ExecutorService executor = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "amap-poi-search");
+        t.setDaemon(true);
+        return t;
+    });
 
     public AmapPoiSearchTool(ExternalClientProperties properties, MockTools mockTools,
                              ToolTraceService traceService, ObjectMapper objectMapper,
@@ -77,45 +84,63 @@ public class AmapPoiSearchTool {
 
             // 并行构建所有搜索任务
             List<CompletableFuture<List<Poi>>> futures = new ArrayList<>();
+            AtomicBoolean qpsLimited = new AtomicBoolean(false);
 
             for (String keyword : keywords(intent, "activityKeywords", activityKeyword(intent))) {
                 final String kw = keyword;
                 futures.add(CompletableFuture.supplyAsync(
-                    () -> safeSearch(planId, intent, PoiType.ENTERTAINMENT, kw, anchor), executor));
+                    () -> safeSearch(planId, intent, PoiType.ENTERTAINMENT, kw, anchor, qpsLimited), executor));
             }
             for (String keyword : keywords(intent, "activityKeywords", "展览|文化|剧场|博物馆")) {
                 final String kw = keyword;
                 futures.add(CompletableFuture.supplyAsync(
-                    () -> safeSearch(planId, intent, PoiType.CULTURE, kw, anchor), executor));
+                    () -> safeSearch(planId, intent, PoiType.CULTURE, kw, anchor, qpsLimited), executor));
             }
             for (String keyword : keywords(intent, "diningKeywords", diningKeyword(intent))) {
                 final String kw = keyword;
                 futures.add(CompletableFuture.supplyAsync(
-                    () -> safeSearch(planId, intent, PoiType.DINING, kw, anchor), executor));
+                    () -> safeSearch(planId, intent, PoiType.DINING, kw, anchor, qpsLimited), executor));
             }
             for (String keyword : keywords(intent, "extraKeywords", "公园|书店|咖啡")) {
                 final String kw = keyword;
                 futures.add(CompletableFuture.supplyAsync(
-                    () -> safeSearch(planId, intent, PoiType.EXTRA, kw, anchor), executor));
+                    () -> safeSearch(planId, intent, PoiType.EXTRA, kw, anchor, qpsLimited), executor));
             }
 
-            // 等待所有并行任务完成
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+            boolean searchTimedOut = false;
+            try {
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0]))
+                        .get(poiSearchTotalTimeoutMs(amap, futures.size()), TimeUnit.MILLISECONDS);
+            } catch (Exception e) {
+                searchTimedOut = true;
+                futures.forEach(future -> {
+                    if (!future.isDone()) {
+                        future.cancel(true);
+                    }
+                });
+                traceService.trace(planId, "AmapPoiSearchTool", "timeout", System.currentTimeMillis(),
+                        Map.of("taskCount", futures.size()),
+                        Map.of("reason", "poi_search_total_timeout", "timeoutMs", poiSearchTotalTimeoutMs(amap, futures.size())));
+            }
 
             List<Poi> pois = futures.stream()
-                    .map(f -> f.getNow(List.of()))
+                    .map(this::completedPois)
                     .flatMap(List::stream)
                     .collect(Collectors.toList());
 
             // 若 ENTERTAINMENT 为空，补充 fallback
-            if (pois.stream().noneMatch(poi -> poi.getType() == PoiType.ENTERTAINMENT)) {
+            if (!searchTimedOut && pois.stream().noneMatch(poi -> poi.getType() == PoiType.ENTERTAINMENT)) {
                 pois.addAll(searchByKeyword(planId, intent, PoiType.ENTERTAINMENT,
                         fallbackActivityKeyword(intent), anchor));
             }
 
             List<Poi> deduped = dedupePois(pois);
+            if (qpsLimited.get() && deduped.size() < MIN_DEDUPED_SIZE) {
+                deduped = dedupePois(recoverAfterQpsLimit(planId, intent, anchor, deduped));
+            }
             if (deduped.size() < MIN_DEDUPED_SIZE) {
-                return blockOrMock(planId, intent, "empty_or_too_few_results", SEARCH_PATH);
+                return blockOrMock(planId, intent,
+                        qpsLimited.get() ? "amap_qps_limited" : "empty_or_too_few_results", SEARCH_PATH);
             }
             return deduped;
         } catch (PlanBlockedException e) {
@@ -198,9 +223,13 @@ public class AmapPoiSearchTool {
         return item;
     }
 
-    private List<Poi> safeSearch(UUID planId, Map<String, Object> intent, PoiType type, String keyword, Anchor anchor) {
+    private List<Poi> safeSearch(UUID planId, Map<String, Object> intent, PoiType type, String keyword, Anchor anchor,
+                                 AtomicBoolean qpsLimited) {
         try {
             return searchByKeyword(planId, intent, type, keyword, anchor);
+        } catch (AmapQpsLimitedException e) {
+            qpsLimited.set(true);
+            return List.of();
         } catch (Exception e) {
             return List.of();
         }
@@ -228,7 +257,10 @@ public class AmapPoiSearchTool {
 
         Map<String, Object> body = cachedAmapGet(CacheConfig.POI_CACHE,
                 "search:" + keyword + ":" + city + ":" + (anchor == null ? "text" : anchor.lng() + "," + anchor.lat()),
-                uri, requestTimeoutMs(amap), true);
+                uri, requestTimeoutMs(amap), false);
+        if (isQpsLimited(body)) {
+            throw new AmapQpsLimitedException();
+        }
         List<Map<String, Object>> rawPois = castList(body.get("pois"));
         List<Poi> mapped = rawPois.stream()
                 .map(raw -> ExternalPoiMapper.fromAmap(raw, type))
@@ -269,7 +301,6 @@ public class AmapPoiSearchTool {
         URI uri = URI.create(sourceUrl + "?key=" + encode(amap.getWebServiceKey())
                 + "&address=" + encode(district)
                 + cityQuery(city));
-        requestLimiter.awaitSlot();
         Map<String, Object> body = cachedAmapGet(CacheConfig.GEOCODE_CACHE,
                 "geocode:" + city + ":" + district, uri, requestTimeoutMs(amap), false);
         List<Map<String, Object>> geocodes = castList(body.get("geocodes"));
@@ -512,6 +543,50 @@ public class AmapPoiSearchTool {
         return Math.min(amap.getTimeoutMs(), MAX_REQUEST_TIMEOUT_MS);
     }
 
+    private int poiSearchTotalTimeoutMs(ExternalClientProperties.Amap amap, int taskCount) {
+        int byTask = requestTimeoutMs(amap) + Math.max(1, taskCount) * 180;
+        return Math.min(MAX_POI_SEARCH_TOTAL_TIMEOUT_MS, Math.max(1800, byTask));
+    }
+
+    private List<Poi> completedPois(CompletableFuture<List<Poi>> future) {
+        if (!future.isDone() || future.isCancelled()) {
+            return List.of();
+        }
+        try {
+            return future.getNow(List.of());
+        } catch (Exception e) {
+            return List.of();
+        }
+    }
+
+    private List<Poi> recoverAfterQpsLimit(UUID planId, Map<String, Object> intent, Anchor anchor, List<Poi> existing) {
+        long start = System.currentTimeMillis();
+        List<Poi> recovered = new ArrayList<>(existing);
+        try {
+            Thread.sleep(650);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        List<SearchSeed> seeds = List.of(
+                new SearchSeed(PoiType.ENTERTAINMENT, fallbackActivityKeyword(intent)),
+                new SearchSeed(PoiType.DINING, diningKeyword(intent)),
+                new SearchSeed(PoiType.EXTRA, keywords(intent, "extraKeywords", "公园|书店|咖啡").get(0))
+        );
+        for (SearchSeed seed : seeds) {
+            try {
+                recovered.addAll(searchByKeyword(planId, intent, seed.type(), seed.keyword(), anchor));
+            } catch (AmapQpsLimitedException e) {
+                break;
+            } catch (Exception ignored) {
+                // Best-effort recovery; final validation decides whether the result is usable.
+            }
+        }
+        traceService.trace(planId, "AmapPoiSearchTool", "recovered", start,
+                Map.of("reason", "amap_qps_limited", "existingCount", existing.size()),
+                Map.of("count", dedupePois(recovered).size(), "policy", "sequential_core_keyword_retry"));
+        return recovered;
+    }
+
     private boolean hasVisibleName(String value) {
         return value != null && !value.isBlank();
     }
@@ -539,4 +614,6 @@ public class AmapPoiSearchTool {
     }
 
     private record Anchor(String name, double lng, double lat) {}
+    private record SearchSeed(PoiType type, String keyword) {}
+    private static class AmapQpsLimitedException extends RuntimeException {}
 }

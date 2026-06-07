@@ -1,6 +1,5 @@
 package com.localagent.service;
 
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -28,15 +27,15 @@ class SessionServiceUnitTest {
     }
 
     @Test
-    void normalRuntimeDoesNotFallbackToMemoryWhenRedisFails() {
+    void normalRuntimeFallsBackToMemoryWhenRedisFails() {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         org.mockito.Mockito.doThrow(new IllegalStateException("redis down"))
                 .when(valueOperations).set(anyString(), anyString(), any(Duration.class));
+        when(redisTemplate.hasKey(anyString())).thenThrow(new IllegalStateException("redis down"));
         SessionService sessionService = new SessionService(redisTemplate, 24, false);
 
-        assertThatThrownBy(() -> sessionService.create("auditor"))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("redis down");
+        String token = sessionService.create("auditor").token();
+        sessionService.validate(token);
     }
 
     @Test

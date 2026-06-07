@@ -94,7 +94,7 @@ public class IntentParserAgent {
         boolean friends = containsAny(text, "朋友", "好友", "同学", "同事", "聚会", "团建");
         boolean couple = containsAny(text, "情侣", "约会", "对象", "女朋友", "男朋友", "夫妻");
         boolean family = familySignal(text);
-        boolean elderly = containsAny(text, "老人", "长辈", "父母", "爸妈", "妈妈", "爸爸", "行动不便");
+        boolean elderly = containsAny(text, "老人", "长辈", "父母", "爸妈", "妈妈", "爸爸", "爷爷", "奶奶", "外公", "外婆", "行动不便");
         boolean solo = containsAny(text, "我自己", "一个人", "独自", "单人", "无同行人", "没有同行人", "就我", "只有我")
                 || (!family && !friends && !couple && containsAny(text, "我现在在", "我在", "我周末去", "我今天", "我想", "我想去", "我去", "只有3小时", "只有 3 小时"));
         boolean lowCal = containsAny(text, "减肥", "低卡", "清淡", "轻食", "不吃辣", "忌口", "过敏");
@@ -158,7 +158,8 @@ public class IntentParserAgent {
 
     private boolean familySignal(String text) {
         String value = text == null ? "" : text;
-        if (containsAny(value, "孩子", "小孩", "儿童", "亲子", "宝宝", "爸妈", "父母", "一家三口", "两大一小", "2大1小")) {
+        if (containsAny(value, "孩子", "小孩", "儿童", "亲子", "宝宝", "爸妈", "父母", "妈妈", "爸爸",
+                "爷爷", "奶奶", "外公", "外婆", "一家三口", "两大一小", "2大1小")) {
             return true;
         }
         String withoutPoiNames = value.replaceAll("家庭[\\u4e00-\\u9fa5A-Za-z0-9・·\\s()（）-]{0,16}(餐厅|海鲜|饭店|菜馆|店)", "");
@@ -341,7 +342,10 @@ public class IntentParserAgent {
                 .compile("([\\u4e00-\\u9fa5]{2,12}?)(市)")
                 .matcher(value);
         while (explicit.find()) {
-            references.add(new CityReference(explicit.group(1), explicit.start(1)));
+            String candidate = explicit.group(1);
+            if (knownCities().contains(candidate) && isExplicitCityMention(value, explicit.start(1), candidate)) {
+                references.add(new CityReference(candidate, explicit.start(1)));
+            }
         }
         for (String city : knownCities()) {
             int from = 0;
@@ -475,6 +479,16 @@ public class IntentParserAgent {
                 .compile("(?<!\\d)([01]?\\d|2[0-3])\\s*[:.：]\\s*([0-5]\\d)(?!\\d)")
                 .matcher(text);
         if (digital.find()) return String.format("%02d:%s", Integer.parseInt(digital.group(1)), digital.group(2));
+        java.util.regex.Matcher labeledHour = java.util.regex.Pattern
+                .compile("(开始时间|出发时间|开始|出发)\\s*[:：]?\\s*(上午|早上|中午|下午|晚上|今晚)?\\s*(2[0-3]|1\\d|[1-9])\\b(?!\\s*(小时|分钟|人|大|小|元|块))")
+                .matcher(text);
+        if (labeledHour.find()) {
+            int hour = Integer.parseInt(labeledHour.group(3));
+            String period = labeledHour.group(2) == null ? "" : labeledHour.group(2);
+            if ((period.contains("下午") || period.contains("晚上") || period.contains("今晚")) && hour < 12) hour += 12;
+            if (period.contains("中午") && hour < 11) hour += 12;
+            return String.format("%02d:00", hour);
+        }
         java.util.regex.Matcher explicitChineseHour = java.util.regex.Pattern
                 .compile("(上午|早上|中午|下午|晚上|今晚)?\\s*([一二两三四五六七八九十]|1[0-2]|[1-9])\\s*点\\s*(半|[0-5]?\\d分?)?(开始|出发|左右|前后)?")
                 .matcher(text);
@@ -499,6 +513,8 @@ public class IntentParserAgent {
         if (couple) return 2;
         if (containsAny(text, "我和两个朋友", "我跟两个朋友")) return 3;
         if (containsAny(text, "带爸妈", "带父母", "我和爸妈", "我跟爸妈")) return 3;
+        Integer familyMemberCount = explicitFamilyMemberGroupTotal(text);
+        if (familyMemberCount != null) return familyMemberCount;
         if (containsAny(text, "两个大人一个孩子", "2个大人1个孩子", "两大一小", "2大1小", "一家三口", "三口")) return 3;
         java.util.regex.Matcher compactFamily = java.util.regex.Pattern
                 .compile("(\\d+)\\s*(大|个大人)\\s*(\\d+)\\s*(小|个孩子|个小孩|个儿童)")
@@ -528,10 +544,31 @@ public class IntentParserAgent {
         if (containsAny(text, "两个人")) return "两个人";
         if (containsAny(text, "2大1小", "两大一小")) return "2大1小";
         if (friends && total != null) return "朋友同行";
+        if (containsAny(text, "爷爷", "奶奶", "外公", "外婆")) return "老人同行";
         if (containsAny(text, "爸妈", "父母")) return "我和父母";
         if (family && total != null) return "家庭亲子";
         if (total != null) return total + "人同行";
         return null;
+    }
+
+    private Integer explicitFamilyMemberGroupTotal(String text) {
+        String value = text == null ? "" : text;
+        if (!containsAny(value, "带", "我和", "我跟", "陪")) {
+            return null;
+        }
+        int members = 0;
+        for (String keyword : List.of("爸爸", "妈妈", "爷爷", "奶奶", "外公", "外婆")) {
+            if (value.contains(keyword)) {
+                members++;
+            }
+        }
+        if (value.contains("父母") || value.contains("爸妈")) {
+            members = Math.max(members, 2);
+        }
+        if (members <= 0) {
+            return null;
+        }
+        return members + 1;
     }
 
     private String extractExplicitEnd(String text, String start) {
