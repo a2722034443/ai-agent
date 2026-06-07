@@ -5,7 +5,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import com.localagent.config.ExternalClientProperties;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -15,11 +14,9 @@ public class ClarificationService {
     );
 
     private final ClarificationAgent clarificationAgent;
-    private final ExternalClientProperties properties;
 
-    public ClarificationService(ClarificationAgent clarificationAgent, ExternalClientProperties properties) {
+    public ClarificationService(ClarificationAgent clarificationAgent) {
         this.clarificationAgent = clarificationAgent;
-        this.properties = properties;
     }
 
     public Map<String, Object> buildClarification(UUID planId, Map<String, Object> intent, String rawMessage) {
@@ -101,7 +98,6 @@ public class ClarificationService {
         Map<String, Object> group = mutableMap(intent.get("group"));
         Map<String, Object> preferences = mutableMap(intent.get("soft_preferences"));
         String message = string(rawMessage);
-        applyDefaultOriginForCurrentLocation(location, message);
         intent.put("location", location);
 
         if (!hasActionableLocation(location)) {
@@ -236,11 +232,6 @@ public class ClarificationService {
     private void putLocation(Map<String, Object> location, String text) {
         if (text == null || text.isBlank()) return;
         double[] coordinates = parseCoordinates(text);
-        boolean fromConfiguredDefault = false;
-        if (coordinates == null && isCurrentLocationText(text)) {
-            coordinates = parseCoordinates(properties.getAmap().getDefaultOrigin());
-            fromConfiguredDefault = coordinates != null;
-        }
         if (coordinates != null) {
             location.put("city", inferCity(text));
             location.put("district", text.contains("当前位置") ? "当前位置" : text);
@@ -248,11 +239,7 @@ public class ClarificationService {
             location.put("lat", coordinates[1]);
             location.put("radius", "nearby");
             location.remove("needsConcreteAnchor");
-            if (fromConfiguredDefault) {
-                markConfiguredDefaultOrigin(location);
-            } else {
-                location.putIfAbsent("source", text.contains("当前位置") ? "user_coordinate" : "user_input");
-            }
+            location.putIfAbsent("source", text.contains("当前位置") ? "user_coordinate" : "user_input");
             return;
         }
         if (!isConcreteLocation(text)) {
@@ -271,28 +258,6 @@ public class ClarificationService {
                 "reason", "已识别城市和地标，坐标需由地图服务解析。"
         ));
         location.remove("needsConcreteAnchor");
-    }
-
-    private void applyDefaultOriginForCurrentLocation(Map<String, Object> location, String text) {
-        if (hasCoordinates(location) || !isCurrentLocationText(text)) return;
-        double[] coordinates = parseCoordinates(properties.getAmap().getDefaultOrigin());
-        if (coordinates == null) return;
-        location.put("city", inferCity(text));
-        location.put("district", "当前位置");
-        location.put("lng", coordinates[0]);
-        location.put("lat", coordinates[1]);
-        location.put("radius", "nearby");
-        location.remove("needsConcreteAnchor");
-        markConfiguredDefaultOrigin(location);
-    }
-
-    private void markConfiguredDefaultOrigin(Map<String, Object> location) {
-        location.put("source", "config_default_origin");
-        location.put("locationTrust", Map.of(
-                "level", "mock_or_config",
-                "confidence", 0.35,
-                "reason", "当前位置没有浏览器坐标，已使用本地配置的兜底坐标；出发前必须重新确认真实位置。"
-        ));
     }
 
     private void putTime(Map<String, Object> timeWindow, String text) {

@@ -98,6 +98,36 @@ class ApiControllerTest {
     }
 
     @Test
+    void snackNearbyRequestWithoutBrowserCoordinatesAsksForLocationAndDoesNotUseDefaultOrigin() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+        when(mimoClient.complete(anyString(), anyString())).thenThrow(new IllegalStateException("test fallback"));
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = extractJsonString(sessionResult, "token");
+
+        mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", CLIENT_ID)
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content("{\"message\":\"在附近吃点小吃\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
+                .andExpect(jsonPath("$.options").isEmpty())
+                .andExpect(jsonPath("$.intent.location.lng").doesNotExist())
+                .andExpect(jsonPath("$.intent.location.lat").doesNotExist())
+                .andExpect(jsonPath("$.intent.location.locationTrust.level").value("unknown"))
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='location')]").exists())
+                .andExpect(jsonPath("$.trace[?(@.tool=='AmapPoiSearchTool')]").doesNotExist())
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
+                        .string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("大连"))));
+    }
+
+    @Test
     void durationClarificationExplainsStartTimeWasRecognized() throws Exception {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.hasKey(anyString())).thenReturn(true);
@@ -184,7 +214,7 @@ class ApiControllerTest {
     }
 
     @Test
-    void nearbyFriendsRequestUsesDefaultOriginButStillNeedsOtherRequiredContext() throws Exception {
+    void nearbyFriendsRequestWithoutCoordinatesMustAskForLocationEvenWhenDefaultOriginConfigured() throws Exception {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.hasKey(anyString())).thenReturn(true);
         when(mimoClient.complete(anyString(), anyString())).thenThrow(new IllegalStateException("test fallback"));
@@ -204,9 +234,10 @@ class ApiControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
                 .andExpect(jsonPath("$.options").isEmpty())
-                .andExpect(jsonPath("$.intent.location.lng").value(121.588))
-                .andExpect(jsonPath("$.intent.location.lat").value(38.883))
-                .andExpect(jsonPath("$.clarification.fields[?(@.key=='location')]").doesNotExist())
+                .andExpect(jsonPath("$.intent.location.lng").doesNotExist())
+                .andExpect(jsonPath("$.intent.location.lat").doesNotExist())
+                .andExpect(jsonPath("$.intent.location.locationTrust.level").value("unknown"))
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='location')]").exists())
                 .andExpect(jsonPath("$.clarification.fields[?(@.key=='timeWindow')]").exists())
                 .andExpect(jsonPath("$.clarification.fields[?(@.key=='duration')]").exists())
                 .andExpect(jsonPath("$.clarification.fields[?(@.key=='group')]").exists())
@@ -344,9 +375,10 @@ class ApiControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
                 .andExpect(jsonPath("$.options").isEmpty())
-                .andExpect(jsonPath("$.intent.location.lng").value(121.588))
-                .andExpect(jsonPath("$.intent.location.lat").value(38.883))
-                .andExpect(jsonPath("$.clarification.fields[?(@.key=='location')]").doesNotExist())
+                .andExpect(jsonPath("$.intent.location.lng").doesNotExist())
+                .andExpect(jsonPath("$.intent.location.lat").doesNotExist())
+                .andExpect(jsonPath("$.intent.location.needsConcreteAnchor").value(true))
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='location')]").exists())
                 .andExpect(jsonPath("$.clarification.fields[?(@.key=='timeWindow')]").exists())
                 .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers.content()
                         .string(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("大连"))))
@@ -437,7 +469,7 @@ class ApiControllerTest {
     }
 
     @Test
-    void currentLocationAnswerUsesConfiguredDefaultOriginAndNoCompanionMeansSolo() throws Exception {
+    void currentLocationAnswerWithoutCoordinatesKeepsOtherFactsButStillAsksForLocation() throws Exception {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.hasKey(anyString())).thenReturn(true);
         when(mimoClient.complete(anyString(), anyString())).thenThrow(new IllegalStateException("fast fallback"));
@@ -468,11 +500,12 @@ class ApiControllerTest {
                         .contentType("application/json")
                         .content(body))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("READY"))
-                .andExpect(jsonPath("$.options").isArray())
-                .andExpect(jsonPath("$.options[0].timeline.length()").value(org.hamcrest.Matchers.greaterThanOrEqualTo(3)))
-                .andExpect(jsonPath("$.intent.location.lng").value(121.588))
-                .andExpect(jsonPath("$.intent.location.lat").value(38.883))
+                .andExpect(jsonPath("$.status").value("NEEDS_CLARIFICATION"))
+                .andExpect(jsonPath("$.options").isEmpty())
+                .andExpect(jsonPath("$.intent.location.lng").doesNotExist())
+                .andExpect(jsonPath("$.intent.location.lat").doesNotExist())
+                .andExpect(jsonPath("$.intent.location.needsConcreteAnchor").value(true))
+                .andExpect(jsonPath("$.clarification.fields[?(@.key=='location')]").exists())
                 .andExpect(jsonPath("$.intent.group.total").value(1))
                 .andExpect(jsonPath("$.intent.group.composition").value("单人"))
                 .andExpect(jsonPath("$.intent.poiSearchStrategy.activityKeywords").value(org.hamcrest.Matchers.hasItem("电影院")))
