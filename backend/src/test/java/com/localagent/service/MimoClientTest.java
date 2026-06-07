@@ -34,6 +34,7 @@ class MimoClientTest {
         MimoClient.CompletionResult result = client.completeWithMeta("system", "user");
 
         assertThat(result.content()).contains("friends");
+        assertThat(result.responseSource()).isEqualTo("content");
         assertThat(result.lane()).isEqualTo("secondary");
         assertThat(result.fallbackReason()).contains("primary");
         assertThat(httpClient.apiKeys).containsExactly("primary-key", "secondary-key");
@@ -53,6 +54,7 @@ class MimoClientTest {
         MimoClient.CompletionResult result = client.completeWithMeta("system", "user");
 
         assertThat(result.content()).contains("friends");
+        assertThat(result.responseSource()).isEqualTo("content");
         assertThat(result.lane()).isEqualTo("secondary");
         assertThat(result.failures()).anyMatch(reason -> reason.contains("primary"));
         assertThat(httpClient.apiKeys).containsExactly("primary-key", "secondary-key");
@@ -71,6 +73,41 @@ class MimoClientTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("primary")
                 .hasMessageContaining("secondary");
+    }
+
+    @Test
+    void usesReasoningContentWhenContentIsBlank() {
+        ExternalClientProperties properties = properties();
+        RecordingHttpClient httpClient = new RecordingHttpClient(List.of(
+                response(200, """
+                        {"choices":[{"finish_reason":"stop","message":{"content":"","reasoning_content":"{\\"scenario\\":\\"friends\\"}"}}]}
+                        """)
+        ));
+        MimoClient client = new MimoClient(properties, new ObjectMapper(), httpClient);
+
+        MimoClient.CompletionResult result = client.completeWithMeta("system", "user");
+
+        assertThat(result.content()).contains("friends");
+        assertThat(result.reasoningContent()).contains("friends");
+        assertThat(result.finishReason()).isEqualTo("stop");
+        assertThat(result.responseSource()).isEqualTo("reasoning_content");
+    }
+
+    @Test
+    void reportsFinishReasonWhenBothContentAndReasoningContentAreBlank() {
+        ExternalClientProperties properties = properties();
+        RecordingHttpClient httpClient = new RecordingHttpClient(List.of(
+                response(200, """
+                        {"choices":[{"finish_reason":"length","message":{"content":"","reasoning_content":""}}]}
+                        """)
+        ));
+        MimoClient client = new MimoClient(properties, new ObjectMapper(), httpClient);
+
+        assertThatThrownBy(() -> client.completeWithMeta("system", "user"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("finish_reason=length")
+                .hasMessageContaining("contentBlank=true")
+                .hasMessageContaining("reasoningContentBlank=true");
     }
 
     private ExternalClientProperties properties() {

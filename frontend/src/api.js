@@ -1,3 +1,5 @@
+import { createUuid } from './uuid.js'
+
 const BASE_URL = import.meta.env.VITE_API_URL || ''
 const TOKEN_KEY = 'lla_token'
 const CLIENT_KEY = 'lla_client_id'
@@ -11,7 +13,7 @@ export function getSessionToken() {
 export function getClientId() {
   const existing = localStorage.getItem(CLIENT_KEY)
   if (existing) return existing
-  const created = crypto.randomUUID()
+  const created = createUuid()
   localStorage.setItem(CLIENT_KEY, created)
   return created
 }

@@ -45,7 +45,7 @@ class IntentParserModeApiTest {
     void llmFallbackModeUsesMimoForInitialIntentParsing() throws Exception {
         when(redisTemplate.opsForValue()).thenReturn(valueOperations);
         when(redisTemplate.hasKey(anyString())).thenReturn(true);
-        when(mimoClient.completeWithMeta(anyString(), anyString())).thenReturn(new MimoClient.CompletionResult("""
+        MimoClient.CompletionResult contentResult = new MimoClient.CompletionResult("""
                 {
                   "scenario": "friends",
                   "location": {"city": "上海", "district": "静安寺", "radius": "nearby"},
@@ -60,7 +60,9 @@ class IntentParserModeApiTest {
                   },
                   "confidence": 0.91
                 }
-                """, "primary", "mimo-test", 18, "", List.of()));
+                """, "", "stop", "content", "primary", "mimo-test", 18, "", List.of());
+        when(mimoClient.completeIntentParseWithMeta(anyString(), anyString())).thenReturn(contentResult);
+        when(mimoClient.completeWithMeta(anyString(), anyString())).thenReturn(contentResult);
 
         MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
                         .contentType("application/json")
@@ -75,8 +77,94 @@ class IntentParserModeApiTest {
                         .contentType("application/json")
                         .content("{\"message\":\"今晚朋友小聚，帮我安排一下\"}"))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.status").value("READY"))
                 .andExpect(jsonPath("$.intent.confidence").value(0.91))
+                .andExpect(jsonPath("$.intent.location.city").value("上海"))
+                .andExpect(jsonPath("$.intent.group.total").value(4))
                 .andExpect(jsonPath("$.trace[?(@.tool=='IntentParserAgent' && @.provider=='mimo' && @.mode=='real')]").exists());
+    }
+
+    @Test
+    void llmFallbackModeAcceptsJsonFromReasoningContent() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+        MimoClient.CompletionResult reasoningResult = new MimoClient.CompletionResult(
+                """
+                {
+                  "scenario": "friends",
+                  "location": {"city": "上海", "district": "静安寺", "radius": "nearby"},
+                  "time_window": {"start": "19:00", "durationMinutes": 180},
+                  "group": {"total": 4, "composition": "朋友同行", "hasChildren": false, "hasElderly": false},
+                  "hard_constraints": ["低步行"],
+                  "soft_preferences": {"budget": "medium", "budgetAmount": 800, "vibe": "朋友小聚"},
+                  "poiSearchStrategy": {
+                    "activityKeywords": ["展览"],
+                    "diningKeywords": ["聚餐"],
+                    "extraKeywords": ["咖啡"]
+                  },
+                  "confidence": 0.91
+                }
+                """,
+                """
+                {
+                  "scenario": "friends",
+                  "location": {"city": "上海", "district": "静安寺", "radius": "nearby"},
+                  "time_window": {"start": "19:00", "durationMinutes": 180},
+                  "group": {"total": 4, "composition": "朋友同行", "hasChildren": false, "hasElderly": false},
+                  "hard_constraints": ["低步行"],
+                  "soft_preferences": {"budget": "medium", "budgetAmount": 800, "vibe": "朋友小聚"},
+                  "poiSearchStrategy": {
+                    "activityKeywords": ["展览"],
+                    "diningKeywords": ["聚餐"],
+                    "extraKeywords": ["咖啡"]
+                  },
+                  "confidence": 0.91
+                }
+                """,
+                "stop", "reasoning_content", "primary", "mimo-test", 18, "", List.of());
+        when(mimoClient.completeIntentParseWithMeta(anyString(), anyString())).thenReturn(reasoningResult);
+        when(mimoClient.completeWithMeta(anyString(), anyString())).thenReturn(reasoningResult);
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = sessionResult.getResponse().getContentAsString().split("\"token\":\"")[1].split("\"")[0];
+
+        mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", "client-test")
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content("{\"message\":\"今晚朋友小聚，帮我安排一下\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.intent.confidence").value(0.91))
+                .andExpect(jsonPath("$.intent.location.city").value("上海"))
+                .andExpect(jsonPath("$.trace[?(@.tool=='IntentParserAgent' && @.provider=='mimo' && @.mode=='real' && @.output.responseSource=='reasoning_content')]").exists());
+    }
+
+    @Test
+    void llmFallbackModeMarksTruncationClearlyWhenJsonIsCutOff() throws Exception {
+        when(redisTemplate.opsForValue()).thenReturn(valueOperations);
+        when(redisTemplate.hasKey(anyString())).thenReturn(true);
+        when(mimoClient.completeIntentParseWithMeta(anyString(), anyString())).thenThrow(
+                new IllegalStateException("finish_reason=length / truncated before JSON closed"));
+        when(mimoClient.completeWithMeta(anyString(), anyString())).thenThrow(
+                new IllegalStateException("finish_reason=length / truncated before JSON closed"));
+
+        MvcResult sessionResult = mockMvc.perform(post("/api/sessions")
+                        .contentType("application/json")
+                        .content("{\"nickname\":\"auditor\"}"))
+                .andExpect(status().isOk())
+                .andReturn();
+        String token = sessionResult.getResponse().getContentAsString().split("\"token\":\"")[1].split("\"")[0];
+
+        mockMvc.perform(post("/api/plans")
+                        .header("X-Client-Id", "client-test")
+                        .header("X-Session-Token", token)
+                        .contentType("application/json")
+                        .content("{\"message\":\"今晚朋友小聚，帮我安排一下\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.intent.scenario").value("friends"))
+                .andExpect(jsonPath("$.trace[?(@.tool=='IntentParserAgent' && @.provider=='mimo' && @.mode=='fallback' && @.output.reason=='finish_reason=length / truncated before JSON closed')]").exists());
     }
 }

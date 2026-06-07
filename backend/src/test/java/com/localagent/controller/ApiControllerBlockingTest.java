@@ -5,6 +5,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.localagent.service.MimoClient;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -32,6 +33,8 @@ import org.springframework.test.web.servlet.MvcResult;
 class ApiControllerBlockingTest {
     @MockBean
     private StringRedisTemplate redisTemplate;
+    @MockBean
+    private MimoClient mimoClient;
 
     @jakarta.annotation.Resource
     private MockMvc mockMvc;

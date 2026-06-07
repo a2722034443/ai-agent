@@ -412,6 +412,7 @@ import irasutoyaCollab from './assets/demo-only/irasutoya/collab-talk.png'
 import irasutoyaMemory from './assets/demo-only/irasutoya/family-memory.png'
 import irasutoyaWelcome from './assets/demo-only/irasutoya/family-outing.png'
 import profileIcon from './assets/brand/profile-icon.png'
+import { createUuid } from './uuid.js'
 import {
   confirmPlan,
   createPlan,
@@ -701,8 +702,8 @@ async function plan() {
   currentStep.value = 'need'
   shownPlans.value = []
   completedClarificationAnswers.value = {}
-  messages.value.push({ id: crypto.randomUUID(), role: 'user', text, time: nowText() })
-  const loadingId = crypto.randomUUID()
+  messages.value.push({ id: createUuid(), role: 'user', text, time: nowText() })
+  const loadingId = createUuid()
   messages.value.push({ id: loadingId, role: 'assistant', loading: true, time: nowText() })
   try {
     await ensureSession()
@@ -760,8 +761,8 @@ async function submitClarification() {
   try {
     const answers = await buildClarificationAnswers()
     const summaryText = clarificationSummary(answers, clarification.value?.fields || [])
-    messages.value.push({ id: crypto.randomUUID(), role: 'user', text: summaryText, time: nowText() })
-    loadingId = crypto.randomUUID()
+    messages.value.push({ id: createUuid(), role: 'user', text: summaryText, time: nowText() })
+    loadingId = createUuid()
     messages.value.push({ id: loadingId, role: 'assistant', loading: true, time: nowText() })
     await ensureSession()
     console.info('[clarification] submit', {
@@ -811,7 +812,7 @@ async function submitClarification() {
     if (loadingId) {
       replaceLoading(loadingId, { role: 'assistant', text: friendlyError(err), time: nowText() })
     } else {
-      messages.value.push({ id: crypto.randomUUID(), role: 'assistant', text: friendlyError(err), time: nowText() })
+      messages.value.push({ id: createUuid(), role: 'assistant', text: friendlyError(err), time: nowText() })
     }
     await loadThreads()
   } finally {
@@ -886,7 +887,7 @@ async function openThread(threadId) {
       payload: err?.payload || null
     })
     messages.value.push({
-      id: crypto.randomUUID(),
+      id: createUuid(),
       role: 'assistant',
       text: '历史记录打开失败了，当前先保留现场。请重试一次；如果还失败，我继续修这个历史恢复链路。',
       time: nowText()

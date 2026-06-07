@@ -54,7 +54,8 @@ public class PlanGeneratorAgent {
                     Map.of("routeCandidateCount", routeCandidates.size(), "evidenceCount", webEvidence.size()),
                     Map.of("provider", "mimo", "mode", "real", "lane", completion.lane(),
                             "model", completion.model(), "llmDurationMs", completion.durationMs(),
-                            "fallbackReason", completion.fallbackReason(), "count", options.size()));
+                            "fallbackReason", completion.fallbackReason(), "finishReason", completion.finishReason(),
+                            "responseSource", completion.responseSource(), "count", options.size()));
             return normalize(options, requestedCount);
         } catch (Exception e) {
             traceService.trace(planId, "PlanGeneratorAgent", "blocked", start,

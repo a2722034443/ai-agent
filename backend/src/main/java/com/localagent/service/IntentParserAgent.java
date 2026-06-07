@@ -69,15 +69,25 @@ public class IntentParserAgent {
     public Map<String, Object> parse(UUID planId, String message) {
         long start = System.currentTimeMillis();
         try {
-            MimoClient.CompletionResult completion = mimoClient.completeWithMeta(SYSTEM_PROMPT, message == null ? "" : message);
+            MimoClient.CompletionResult completion = mimoClient.completeIntentParseWithMeta(SYSTEM_PROMPT, message == null ? "" : message);
             String content = completion.content();
             Map<String, Object> intent = normalize(objectMapper.readValue(extractJsonObject(content), new TypeReference<>() {}));
+            Map<String, Object> output = new LinkedHashMap<>();
+            output.put("provider", "mimo");
+            output.put("mode", "real");
+            output.put("lane", completion.lane());
+            output.put("model", completion.model());
+            output.put("llmDurationMs", completion.durationMs());
+            output.put("fallbackReason", completion.fallbackReason());
+            output.put("scenario", intent.get("scenario"));
+            output.put("finishReason", completion.finishReason());
+            output.put("contentLength", completion.content().length());
+            output.put("reasoningContentLength", completion.reasoningContent().length());
+            output.put("responseSource", completion.responseSource());
+            output.put("confidence", intent.getOrDefault("confidence", 0));
             traceService.trace(planId, "IntentParserAgent", "ok", start,
                     Map.of("message", safeSnippet(message)),
-                    Map.of("provider", "mimo", "mode", "real", "lane", completion.lane(),
-                            "model", completion.model(), "llmDurationMs", completion.durationMs(),
-                            "fallbackReason", completion.fallbackReason(), "scenario", intent.get("scenario"),
-                            "confidence", intent.getOrDefault("confidence", 0)));
+                    output);
             return intent;
         } catch (Exception e) {
             Map<String, Object> fallback = keywordFallback(message);
@@ -916,7 +926,11 @@ public class IntentParserAgent {
     }
 
     private String safeReason(Exception e) {
-        return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+        String message = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+        if (message.contains("finish_reason=length")) {
+            return "finish_reason=length / truncated before JSON closed";
+        }
+        return message;
     }
 
     private record CityReference(String name, int index) {}

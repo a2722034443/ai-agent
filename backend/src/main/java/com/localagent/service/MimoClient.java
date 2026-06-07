@@ -21,8 +21,8 @@ import org.springframework.stereotype.Component;
 @Component
 public class MimoClient {
     private static final String CHAT_COMPLETIONS_PATH = "/chat/completions";
-    private static final int FALLBACK_LANE_TIMEOUT_CAP_MS = 3200;
-    private static final int RACE_LANE_TIMEOUT_CAP_MS = 2800;
+    private static final int FALLBACK_LANE_TIMEOUT_CAP_MS = 12000;
+    private static final int RACE_LANE_TIMEOUT_CAP_MS = 8000;
 
     private final ExternalClientProperties properties;
     private final ObjectMapper objectMapper;
@@ -53,8 +53,9 @@ public class MimoClient {
         for (Endpoint endpoint : endpoints) {
             long start = System.currentTimeMillis();
             try {
-                String content = completeOnce(endpoint, systemPrompt, userPrompt);
-                return new CompletionResult(content, endpoint.lane(), endpoint.model(),
+                CompletionPayload payload = completeOnce(endpoint, systemPrompt, userPrompt, false);
+                return new CompletionResult(payload.content(), payload.reasoningContent(), payload.finishReason(),
+                        payload.responseSource(), endpoint.lane(), endpoint.model(),
                         System.currentTimeMillis() - start, fallbackReason, failures);
             } catch (Exception e) {
                 String reason = endpoint.lane() + ": " + safeReason(e);
@@ -72,8 +73,9 @@ public class MimoClient {
                 .map(endpoint -> CompletableFuture.supplyAsync(() -> {
                     long start = System.currentTimeMillis();
                     try {
-                        String content = completeOnce(endpoint, systemPrompt, userPrompt);
-                        return new CompletionResult(content, endpoint.lane(), endpoint.model(),
+                        CompletionPayload payload = completeOnce(endpoint, systemPrompt, userPrompt, false);
+                        return new CompletionResult(payload.content(), payload.reasoningContent(), payload.finishReason(),
+                                payload.responseSource(), endpoint.lane(), endpoint.model(),
                                 System.currentTimeMillis() - start, "parallel-race", List.of());
                     } catch (Exception e) {
                         throw new CompletionException(new IllegalStateException(endpoint.lane() + ": " + safeReason(e), e));
@@ -133,10 +135,41 @@ public class MimoClient {
         return Math.max(500, Math.min(configuredTimeoutMs, cap));
     }
 
-    private String completeOnce(Endpoint endpoint, String systemPrompt, String userPrompt) throws Exception {
+    public CompletionResult completeIntentParseWithMeta(String systemPrompt, String userPrompt) {
+        return completeWithMeta(systemPrompt, userPrompt, true);
+    }
+
+    private CompletionResult completeWithMeta(String systemPrompt, String userPrompt, boolean intentParseRequest) {
+        List<Endpoint> endpoints = endpoints();
+        if (endpoints.isEmpty()) {
+            throw new IllegalStateException("MiMo API not configured");
+        }
+        List<String> failures = new ArrayList<>();
+        long totalStart = System.currentTimeMillis();
+        String fallbackReason = "";
+        for (Endpoint endpoint : endpoints) {
+            long start = System.currentTimeMillis();
+            try {
+                CompletionPayload payload = completeOnce(endpoint, systemPrompt, userPrompt, intentParseRequest);
+                return new CompletionResult(payload.content(), payload.reasoningContent(), payload.finishReason(),
+                        payload.responseSource(), endpoint.lane(), endpoint.model(),
+                        System.currentTimeMillis() - start, fallbackReason, failures);
+            } catch (Exception e) {
+                String reason = endpoint.lane() + ": " + safeReason(e);
+                failures.add(reason);
+                fallbackReason = reason;
+            }
+        }
+        throw new IllegalStateException("MiMo API unavailable after " + (System.currentTimeMillis() - totalStart)
+                + "ms; " + String.join("; ", failures));
+    }
+
+    private CompletionPayload completeOnce(Endpoint endpoint, String systemPrompt, String userPrompt,
+                                           boolean intentParseRequest) throws Exception {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("model", endpoint.model());
-        body.put("max_completion_tokens", Math.max(256, endpoint.maxTokens()));
+        int minTokens = intentParseRequest ? 768 : 256;
+        body.put("max_completion_tokens", Math.max(minTokens, endpoint.maxTokens()));
         body.put("temperature", properties.getLlm().getTemperature());
         body.put("top_p", 0.95);
         body.put("stream", false);
@@ -162,12 +195,21 @@ public class MimoClient {
             if (choices.isEmpty()) {
                 throw new IllegalStateException("MiMo API returned no choices");
             }
-            Map<String, Object> message = castMap(choices.get(0).get("message"));
-            String content = String.valueOf(message.getOrDefault("content", "")).trim();
-            if (content.isBlank()) {
-                throw new IllegalStateException("MiMo API returned empty content");
+            Map<String, Object> firstChoice = choices.get(0);
+            Map<String, Object> message = castMap(firstChoice.get("message"));
+            String content = stringValue(message.get("content")).trim();
+            String reasoningContent = stringValue(message.get("reasoning_content")).trim();
+            String finishReason = stringValue(firstChoice.get("finish_reason")).trim();
+            if (!content.isBlank()) {
+                return new CompletionPayload(content, reasoningContent, finishReason, "content");
             }
-            return content;
+            if (!reasoningContent.isBlank()) {
+                return new CompletionPayload(reasoningContent, reasoningContent, finishReason, "reasoning_content");
+            }
+            throw new IllegalStateException("MiMo API returned no usable text"
+                    + " (finish_reason=" + blankAsUnknown(finishReason)
+                    + ", contentBlank=" + content.isBlank()
+                    + ", reasoningContentBlank=" + reasoningContent.isBlank() + ")");
         } catch (Exception e) {
             throw new IllegalStateException(safeReason(e), e);
         }
@@ -187,12 +229,22 @@ public class MimoClient {
         return value == null || value.isBlank();
     }
 
+    private String stringValue(Object value) {
+        return value == null ? "" : String.valueOf(value);
+    }
+
+    private String blankAsUnknown(String value) {
+        return isBlank(value) ? "unknown" : value;
+    }
+
     private String safeReason(Exception e) {
         return e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
     }
 
+    private record CompletionPayload(String content, String reasoningContent, String finishReason, String responseSource) {}
     private record Endpoint(String lane, String apiKey, String baseUrl, String model, int maxTokens, int timeoutMs) {}
 
-    public record CompletionResult(String content, String lane, String model, long durationMs,
+    public record CompletionResult(String content, String reasoningContent, String finishReason,
+                                   String responseSource, String lane, String model, long durationMs,
                                    String fallbackReason, List<String> failures) {}
 }
