@@ -1172,6 +1172,12 @@ function locationTrustFromBrowser(position) {
 
 function locationTrustFromOrigin(origin = {}) {
   const text = JSON.stringify(origin)
+  if (origin?.source === 'config_default_origin' || origin?.locationTrust?.level === 'mock_or_config') {
+    return {
+      title: '配置兜底坐标',
+      message: '当前位置没有浏览器坐标，后端使用了本地配置兜底；出发前请授权定位或手动输入真实地址。'
+    }
+  }
   if (Number.isFinite(Number(origin.lng)) && Number.isFinite(Number(origin.lat))) {
     return {
       title: origin.source === 'html5' ? '浏览器定位' : '地图起点已解析',

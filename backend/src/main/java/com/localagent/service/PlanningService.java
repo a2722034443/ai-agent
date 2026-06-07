@@ -537,7 +537,8 @@ public class PlanningService {
         List<Poi> extras = tools.sortCandidates(nearby.stream()
                 .filter(poi -> poi.getType() == PoiType.EXTRA)
                 .toList(), intent);
-        int planCount = planCount(intent);
+        int requestedPlanCount = planCount(intent);
+        int planCount = differentiatedPlanCount(requestedPlanCount, intent);
         if (extras.isEmpty()) {
             extras = activities.stream().skip(Math.min(1, activities.size())).toList();
         } else if (extras.size() < Math.min(3, planCount)) {
@@ -557,10 +558,13 @@ public class PlanningService {
         Integer budgetLimit = budgetLimit(intent);
         double directRouteLimitKm = directRoutePrefilterKm(intent, candidatePool);
         double routeDistanceLimitKm = maxRouteDistanceKm(intent, candidatePool);
+        double fallbackRouteLimitKm = fallbackRouteDistanceKm(intent, candidatePool, routeDistanceLimitKm);
         int maxAttempts = Math.min(MAX_ROUTE_ATTEMPTS,
                 Math.max(minimumPlanCount, activities.size() * dining.size() * Math.max(1, extras.size())));
         List<StopCandidate> stopCandidates = stopCandidates(planId, activities, dining, extras, stopCount,
                 durationMinutes(intent), intent);
+        List<RouteFallbackCandidate> routeFallbacks = new ArrayList<>();
+        List<TimeConflictFallbackCandidate> timeConflictFallbacks = new ArrayList<>();
         int attempts = 0;
         while (attempts < maxAttempts && options.size() < planCount && !stopCandidates.isEmpty()) {
             StopCandidate candidate = takeBestCandidate(stopCandidates, usedActivities, usedDining, usedExtras, budgetLimit);
@@ -593,6 +597,15 @@ public class PlanningService {
             double distanceKm = ((Number) route.getOrDefault("distanceKm", 0)).doubleValue();
             if (distanceKm > routeDistanceLimitKm) {
                 tools.recovery(planId, "路线距离过远", signature, "跳过该候选");
+                int totalMinutes = tools.totalMinutes(stops, ((Number) route.get("travelMinutes")).intValue());
+                if (!hasExplicitEnd(intent) && isTooShort(intent, totalMinutes)) {
+                    stops = extendFlexibleStop(stops, durationMinutes(intent) - totalMinutes);
+                    totalMinutes = tools.totalMinutes(stops, ((Number) route.get("travelMinutes")).intValue());
+                }
+                if (distanceKm <= fallbackRouteLimitKm && fitsDuration(intent, totalMinutes)) {
+                    routeFallbacks.add(new RouteFallbackCandidate(stops, route, totalMinutes, candidate,
+                            distanceKm, routeDistanceLimitKm));
+                }
                 continue;
             }
             int totalMinutes = tools.totalMinutes(stops, ((Number) route.get("travelMinutes")).intValue());
@@ -609,15 +622,37 @@ public class PlanningService {
                 usedExtras.add(candidate.extraName());
             } else {
                 tools.recovery(planId, "时间冲突", signature, "跳过该候选");
+                if (hasExplicitEnd(intent)) {
+                    List<Poi> compressed = forceFitStopDurations(stops,
+                            ((Number) route.get("travelMinutes")).intValue(), durationMinutes(intent));
+                    int compressedMinutes = tools.totalMinutes(compressed, ((Number) route.get("travelMinutes")).intValue());
+                    if (compressedMinutes <= durationMinutes(intent)) {
+                        timeConflictFallbacks.add(new TimeConflictFallbackCandidate(compressed, route,
+                                compressedMinutes, candidate));
+                    }
+                }
             }
         }
         if (options.isEmpty()) {
-            throw new PlanBlockedException(planId, "amap",
-                    "抱歉，真实地点不足以生成你要求数量的距离合理方案，请放宽地点范围、减少方案数量或稍后重试", 422);
+            options = routeDistanceFallbackOptions(routeFallbacks, planCount, intent, weather);
+            if (options.isEmpty()) {
+                options = timeConflictFallbackOptions(timeConflictFallbacks, planCount, intent, weather);
+                if (!options.isEmpty()) {
+                    warnings.add(warning("硬结束时间已压缩",
+                            "真实地点可用，但原停留节奏会超过结束时间；已保留压缩版方案，并标注 TIME_CONFLICT 恢复。"));
+                }
+            } else {
+                warnings.add(warning("路线距离偏长",
+                        "真实地点和路线服务已返回结果，但严格近场路线不足；已保留最短真实候选，建议用短驳打车或放宽距离。"));
+            }
+            if (options.isEmpty()) {
+                throw new PlanBlockedException(planId, "amap",
+                        "抱歉，真实地点不足以生成你要求数量的距离合理方案，请放宽地点范围、减少方案数量或稍后重试", 422);
+            }
         }
-        if (options.size() < planCount) {
+        if (options.size() < requestedPlanCount) {
             warnings.add(warning("可行方案数量不足",
-                    "真实地点和路线约束下仅生成 " + options.size() + " 套可行方案，少于你请求的 " + planCount + " 套。"));
+                    "真实地点和路线约束下仅生成 " + options.size() + " 套可行方案，少于你请求的 " + requestedPlanCount + " 套。"));
         }
         if (budgetLimit != null && options.stream().anyMatch(option ->
                 intValue(option.get("budgetEstimate")) != null && intValue(option.get("budgetEstimate")) > budgetLimit)) {
@@ -675,11 +710,16 @@ public class PlanningService {
     private StopCandidate takeBestCandidate(List<StopCandidate> candidates, Set<String> usedActivities,
                                             Set<String> usedDining, Set<String> usedExtras, Integer budgetLimit) {
         StopCandidate best = candidates.stream()
-                .max(Comparator.comparingInt(candidate ->
-                        diversityScore(candidate, usedActivities, usedDining, usedExtras, budgetLimit)))
+                .max(Comparator.comparingDouble(candidate ->
+                        candidateScore(candidate, usedActivities, usedDining, usedExtras, budgetLimit)))
                 .orElse(candidates.get(0));
         candidates.remove(best);
         return best;
+    }
+
+    private double candidateScore(StopCandidate candidate, Set<String> usedActivities, Set<String> usedDining,
+                                  Set<String> usedExtras, Integer budgetLimit) {
+        return diversityScore(candidate, usedActivities, usedDining, usedExtras, budgetLimit);
     }
 
     private int diversityScore(StopCandidate candidate, Set<String> usedActivities, Set<String> usedDining,
@@ -705,6 +745,82 @@ public class PlanningService {
             }
         }
         return expanded;
+    }
+
+    private List<Map<String, Object>> routeDistanceFallbackOptions(List<RouteFallbackCandidate> fallbacks,
+                                                                   int planCount, Map<String, Object> intent,
+                                                                   Map<String, Object> weather) {
+        List<Map<String, Object>> options = new ArrayList<>();
+        Set<String> signatures = new HashSet<>();
+        List<RouteFallbackCandidate> sorted = fallbacks.stream()
+                .sorted(Comparator.comparingDouble(RouteFallbackCandidate::distanceKm))
+                .toList();
+        for (RouteFallbackCandidate fallback : sorted) {
+            if (options.size() >= planCount) {
+                break;
+            }
+            String signature = signature(fallback.stops());
+            if (!signatures.add(signature)) {
+                continue;
+            }
+            Map<String, Object> route = new LinkedHashMap<>(fallback.route());
+            route.put("distanceLimitKm", fallback.strictLimitKm());
+            route.put("distancePolicy", "fallback_shortest_real_route");
+            route.put("transportSuggestion", "建议使用短驳打车或减少一个停留点");
+            Map<String, Object> option = option(options.size() + 1, fallback.stops(), route,
+                    fallback.totalMinutes(), intent, weather);
+            applyGeneralVariant(option, options.size() + 1, intent);
+            List<String> riskNotes = new ArrayList<>(castStringList(option.get("riskNotes")));
+            riskNotes.add("路线距离超过严格近场阈值，已作为最短真实路线保留；出发前建议确认是否接受短驳。");
+            option.put("riskNotes", riskNotes);
+            List<String> fitReasons = new ArrayList<>(castStringList(option.get("fitReasons")));
+            fitReasons.add("高德/路线估算已有结果，本方案按最短真实候选降级保留，没有伪造成近场路线。");
+            option.put("fitReasons", fitReasons);
+            option.put("variantStrategy", String.valueOf(option.getOrDefault("variantStrategy", "")) + "+短驳降级");
+            options.add(option);
+        }
+        return options;
+    }
+
+    private List<Map<String, Object>> timeConflictFallbackOptions(List<TimeConflictFallbackCandidate> fallbacks,
+                                                                  int planCount, Map<String, Object> intent,
+                                                                  Map<String, Object> weather) {
+        List<Map<String, Object>> options = new ArrayList<>();
+        Set<String> signatures = new HashSet<>();
+        List<TimeConflictFallbackCandidate> sorted = fallbacks.stream()
+                .sorted(Comparator.comparingInt(TimeConflictFallbackCandidate::totalMinutes))
+                .toList();
+        for (TimeConflictFallbackCandidate fallback : sorted) {
+            if (options.size() >= planCount) {
+                break;
+            }
+            String signature = signature(fallback.stops());
+            if (!signatures.add(signature)) {
+                continue;
+            }
+            Map<String, Object> route = new LinkedHashMap<>(fallback.route());
+            route.put("timePolicy", "fallback_compress_stay_minutes");
+            route.put("transportSuggestion", "优先保留核心站点，压缩停留时间并用打车兜底收尾");
+            Map<String, Object> option = option(options.size() + 1, fallback.stops(), route,
+                    fallback.totalMinutes(), intent, weather);
+            applyGeneralVariant(option, options.size() + 1, intent);
+            option.put("constraintRecoveries", List.of(Map.of(
+                    "code", "TIME_CONFLICT",
+                    "status", "RECOVERED",
+                    "reason", "原始节奏会超过硬结束时间，已压缩停留并优先保留活动、餐饮和收尾点。",
+                    "fallbackTarget", "压缩停留时间/必要时短驳打车",
+                    "source", "mock"
+            )));
+            List<String> riskNotes = new ArrayList<>(castStringList(option.get("riskNotes")));
+            riskNotes.add("TIME_CONFLICT：本方案为硬结束时间压缩版，停留更短，确认前建议接受节奏较紧。");
+            option.put("riskNotes", riskNotes);
+            List<String> fitReasons = new ArrayList<>(castStringList(option.get("fitReasons")));
+            fitReasons.add("没有把可用地点误判为地点不足，而是按硬结束时间生成压缩恢复方案。");
+            option.put("fitReasons", fitReasons);
+            option.put("variantStrategy", String.valueOf(option.getOrDefault("variantStrategy", "")) + "+时间压缩");
+            options.add(option);
+        }
+        return options;
     }
 
     private Map<String, Object> functionalAcceptanceBlock(UUID planId, Map<String, Object> intent, String message) {
@@ -739,11 +855,39 @@ public class PlanningService {
         String value = message == null ? "" : message;
         for (String city : List.of("北京", "上海", "天津", "重庆", "广州", "深圳", "杭州", "南京", "苏州", "成都",
                 "武汉", "西安", "长沙", "郑州", "青岛", "厦门", "大连", "沈阳", "哈尔滨")) {
-            if (value.contains(city) && !cities.contains(city)) {
+            if (containsCitySignal(value, city) && !cities.contains(city)) {
                 cities.add(city);
             }
         }
         return cities.stream().distinct().limit(4).toList();
+    }
+
+    private boolean containsCitySignal(String message, String city) {
+        if (message == null || city == null || city.isBlank()) {
+            return false;
+        }
+        int index = message.indexOf(city);
+        while (index >= 0) {
+            int end = index + city.length();
+            String suffix = end < message.length()
+                    ? message.substring(end, Math.min(message.length(), end + 2))
+                    : "";
+            if (!startsWithAny(suffix, "东路", "西路", "南路", "北路", "路", "街", "大道", "地铁", "站")) {
+                return true;
+            }
+            index = message.indexOf(city, end);
+        }
+        return false;
+    }
+
+    private boolean startsWithAny(String value, String... prefixes) {
+        String text = value == null ? "" : value;
+        for (String prefix : prefixes) {
+            if (text.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void enrichFunctionalAcceptanceFields(Map<String, Object> option, Map<String, Object> intent) {
@@ -807,9 +951,10 @@ public class PlanningService {
             if (!allowMockPoi) {
                 continue;
             }
-            double lng = base[0] + index * 0.004;
-            double lat = base[1] + index * 0.003;
-            merged.add(new Poi(name, type, explicitSubtype(type), "用户指定地点，演示环境按星海广场周边映射",
+            double lng = base == null ? 0.0 : base[0] + index * 0.004;
+            double lat = base == null ? 0.0 : base[1] + index * 0.003;
+            String address = base == null ? "用户指定地点，坐标待地图服务核验" : "用户指定地点，演示环境按当前锚点周边映射";
+            merged.add(new Poi(name, type, explicitSubtype(type), address,
                     lng, lat, defaultExplicitDuration(type), defaultExplicitPrice(type), 4.6,
                     false, type == PoiType.DINING && name.contains("清淡"), true, true,
                     type != PoiType.DINING && name.contains("无票"), type == PoiType.DINING && name.contains("满"),
@@ -1167,7 +1312,7 @@ public class PlanningService {
         if (candidates != null && !candidates.isEmpty()) {
             return new double[] {candidates.get(0).getLng(), candidates.get(0).getLat()};
         }
-        return new double[] {121.588, 38.883};
+        return null;
     }
 
     private boolean hasRequiredPoiCoverage(List<Poi> stops) {
@@ -1296,6 +1441,13 @@ public class PlanningService {
             return clamp(number.intValue(), 1, 5);
         }
         return 3;
+    }
+
+    private int differentiatedPlanCount(int requestedPlanCount, Map<String, Object> intent) {
+        if (hasCompleteExplicitPoiRoute(intent)) {
+            return Math.min(requestedPlanCount, 3);
+        }
+        return Math.min(requestedPlanCount, 3);
     }
 
     private int stopCount(Map<String, Object> intent) {
@@ -1471,6 +1623,25 @@ public class PlanningService {
                 .map(poi -> {
                     int minimum = poi.getType() == PoiType.DINING ? 55 : poi.getType() == PoiType.EXTRA ? 25 : 45;
                     int adjusted = Math.max(minimum, (int) Math.round(poi.getDurationMinutes() * ratio));
+                    return poiWithDuration(poi, adjusted);
+                })
+                .toList();
+    }
+
+    private List<Poi> forceFitStopDurations(List<Poi> stops, int travelMinutes, int windowMinutes) {
+        int available = windowMinutes - Math.max(0, travelMinutes);
+        if (available <= 0 || stops.isEmpty()) {
+            return stops;
+        }
+        int currentStopMinutes = stops.stream().mapToInt(Poi::getDurationMinutes).sum();
+        if (currentStopMinutes <= available) {
+            return stops;
+        }
+        double ratio = available / (double) currentStopMinutes;
+        return stops.stream()
+                .map(poi -> {
+                    int minimum = poi.getType() == PoiType.DINING ? 25 : poi.getType() == PoiType.EXTRA ? 10 : 25;
+                    int adjusted = Math.max(minimum, (int) Math.floor(poi.getDurationMinutes() * ratio));
                     return poiWithDuration(poi, adjusted);
                 })
                 .toList();
@@ -2008,6 +2179,14 @@ public class PlanningService {
         return Math.max(base, candidatePool.radiusKm() * 2.2);
     }
 
+    private double fallbackRouteDistanceKm(Map<String, Object> intent, CandidatePool candidatePool, double strictLimitKm) {
+        if ("walking".equals(transportProfile(intent))) {
+            return strictLimitKm;
+        }
+        double radius = candidatePool == null || candidatePool.radiusKm() <= 0 ? POI_RADIUS_STEPS_KM.get(0) : candidatePool.radiusKm();
+        return Math.max(strictLimitKm * 1.35, radius * 1.15);
+    }
+
     private double directRoutePrefilterKm(Map<String, Object> intent) {
         return switch (transportProfile(intent)) {
             case "walking" -> WALKING_DIRECT_PREFILTER_KM;
@@ -2090,6 +2269,10 @@ public class PlanningService {
 
     private record CandidatePool(List<Poi> pois, double radiusKm, boolean expanded) {}
     private record StopCandidate(List<Poi> stops, String activityName, String diningName, String extraName, int budget) {}
+    private record RouteFallbackCandidate(List<Poi> stops, Map<String, Object> route, int totalMinutes,
+                                          StopCandidate candidate, double distanceKm, double strictLimitKm) {}
+    private record TimeConflictFallbackCandidate(List<Poi> stops, Map<String, Object> route, int totalMinutes,
+                                                 StopCandidate candidate) {}
 
     @SuppressWarnings("unchecked")
     private double[] anchor(Map<String, Object> intent) {

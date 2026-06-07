@@ -28,12 +28,80 @@ public class MockTools {
 
     public List<Poi> searchPois(UUID planId, Map<String, Object> intent) {
         long start = System.currentTimeMillis();
-        List<Poi> pois = poiRepository.findAll();
+        List<Poi> pois = scopedMockPois(intent);
         Map<String, Object> output = new LinkedHashMap<>(traceService.externalMeta("mock", "mock", "test-mock-data", "ok"));
         output.put("count", pois.size());
         output.put("source", "test_profile_mock_poi");
+        output.put("city", city(intent));
         trace(planId, "PoiSearchTool", "ok", start, intent, output);
         return pois;
+    }
+
+    private List<Poi> scopedMockPois(Map<String, Object> intent) {
+        String city = city(intent);
+        if (city.isBlank() || "大连".equals(city)) {
+            return poiRepository.findAll();
+        }
+        String district = district(intent);
+        double[] base = basePoint(city, district);
+        String prefix = district.isBlank() || "null".equals(district) ? city : district;
+        return List.of(
+                new Poi(prefix + "文化展厅", PoiType.CULTURE, "城市文化展览", prefix + "核心区",
+                        base[0], base[1], 80, 60, 4.7, true, false, true, true, false, false,
+                        "city-scoped-mock", city + "-culture-1"),
+                new Poi(prefix + "室内活动馆", PoiType.ENTERTAINMENT, "室内娱乐", prefix + "商圈",
+                        base[0] + 0.006, base[1] + 0.004, 90, 90, 4.6, true, false, true, true, false, false,
+                        "city-scoped-mock", city + "-entertainment-1"),
+                new Poi(prefix + "轻食餐厅", PoiType.DINING, "轻食餐厅", prefix + "步行街",
+                        base[0] + 0.004, base[1] - 0.003, 65, 85, 4.6, true, true, true, true, false, false,
+                        "city-scoped-mock", city + "-dining-1"),
+                new Poi(prefix + "本地小馆", PoiType.DINING, "本地餐厅", prefix + "街区",
+                        base[0] - 0.005, base[1] + 0.003, 70, 110, 4.5, true, false, true, true, false, false,
+                        "city-scoped-mock", city + "-dining-2"),
+                new Poi(prefix + "咖啡店", PoiType.EXTRA, "咖啡", prefix + "转角",
+                        base[0] + 0.002, base[1] + 0.006, 35, 35, 4.5, true, false, true, true, false, false,
+                        "city-scoped-mock", city + "-extra-1"),
+                new Poi(prefix + "公园步道", PoiType.EXTRA, "轻松散步", prefix + "附近",
+                        base[0] - 0.004, base[1] - 0.004, 45, 0, 4.4, true, true, false, true, false, false,
+                        "city-scoped-mock", city + "-extra-2")
+        );
+    }
+
+    private String city(Map<String, Object> intent) {
+        Map<String, Object> location = castMap(intent.get("location"));
+        String city = String.valueOf(location.getOrDefault("city", "")).trim();
+        if (!city.isBlank() && !"null".equals(city)) {
+            return city;
+        }
+        Object signals = intent.get("citySignals");
+        if (signals instanceof List<?> list && !list.isEmpty()) {
+            return String.valueOf(list.get(0)).trim();
+        }
+        return "";
+    }
+
+    private String district(Map<String, Object> intent) {
+        Map<String, Object> location = castMap(intent.get("location"));
+        String district = String.valueOf(location.getOrDefault("district", "")).trim();
+        return "null".equals(district) ? "" : district;
+    }
+
+    private double[] basePoint(String city, String district) {
+        if (district.contains("静安寺")) return new double[] {121.445, 31.224};
+        if (district.contains("人民广场")) return new double[] {121.475, 31.232};
+        if (district.contains("三里屯")) return new double[] {116.454, 39.934};
+        if (district.contains("天安门")) return new double[] {116.397, 39.908};
+        if (district.contains("西湖")) return new double[] {120.148, 30.259};
+        if (district.contains("春熙路")) return new double[] {104.080, 30.657};
+        if (district.contains("南山")) return new double[] {113.930, 22.533};
+        return switch (city) {
+            case "上海" -> new double[] {121.475, 31.232};
+            case "北京" -> new double[] {116.407, 39.904};
+            case "杭州" -> new double[] {120.155, 30.274};
+            case "成都" -> new double[] {104.066, 30.572};
+            case "深圳" -> new double[] {114.057, 22.543};
+            default -> new double[] {121.475, 31.232};
+        };
     }
 
     public Map<String, Object> route(UUID planId, List<Poi> stops) {
