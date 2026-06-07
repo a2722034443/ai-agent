@@ -2,6 +2,7 @@ package com.localagent.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.localagent.config.CacheConfig;
 import com.localagent.config.ExternalClientProperties;
 import com.localagent.dto.ApiDtos.NearbyPoiCategoryRequest;
 import com.localagent.dto.ApiDtos.NearbyPoiRequest;
@@ -23,6 +24,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -44,6 +47,7 @@ public class AmapPoiSearchTool {
     private final ObjectMapper objectMapper;
     private final AmapRequestLimiter requestLimiter;
     private final HttpClient httpClient;
+    private final CacheManager cacheManager;
     private final boolean allowMockPoi;
     private final ExecutorService executor = Executors.newCachedThreadPool();
 
@@ -51,6 +55,7 @@ public class AmapPoiSearchTool {
                              ToolTraceService traceService, ObjectMapper objectMapper,
                              AmapRequestLimiter requestLimiter,
                              @Qualifier("amapHttpClient") HttpClient httpClient,
+                             CacheManager cacheManager,
                              @Value("${app.allow-mock-poi:false}") boolean allowMockPoi) {
         this.properties = properties;
         this.mockTools = mockTools;
@@ -58,6 +63,7 @@ public class AmapPoiSearchTool {
         this.objectMapper = objectMapper;
         this.requestLimiter = requestLimiter;
         this.httpClient = httpClient;
+        this.cacheManager = cacheManager;
         this.allowMockPoi = allowMockPoi;
     }
 
@@ -220,14 +226,9 @@ public class AmapPoiSearchTool {
                 + "&location=" + encode(anchor.lng() + "," + anchor.lat())
                 + "&radius=" + AROUND_RADIUS + "&sortrule=distance&offset=" + POI_OFFSET + "&page=1&extensions=base");
 
-        Map<String, Object> body = Map.of();
-        for (int attempt = 0; attempt < 3; attempt++) {
-            body = sendAmapGet(uri, requestTimeoutMs(amap));
-            if (!isQpsLimited(body)) {
-                break;
-            }
-            requestLimiter.backoff(attempt);
-        }
+        Map<String, Object> body = cachedAmapGet(CacheConfig.POI_CACHE,
+                "search:" + keyword + ":" + city + ":" + (anchor == null ? "text" : anchor.lng() + "," + anchor.lat()),
+                uri, requestTimeoutMs(amap), true);
         List<Map<String, Object>> rawPois = castList(body.get("pois"));
         List<Poi> mapped = rawPois.stream()
                 .map(raw -> ExternalPoiMapper.fromAmap(raw, type))
@@ -269,22 +270,13 @@ public class AmapPoiSearchTool {
                 + "&address=" + encode(district)
                 + cityQuery(city));
         requestLimiter.awaitSlot();
-        HttpResponse<String> response;
-        try {
-            HttpRequest request = HttpRequest.newBuilder(uri)
-                    .timeout(Duration.ofMillis(requestTimeoutMs(amap)))
-                    .GET()
-                    .build();
-            response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-        } finally {
-            requestLimiter.releaseSlot();
-        }
-        Map<String, Object> body = objectMapper.readValue(response.body(), new TypeReference<>() {});
+        Map<String, Object> body = cachedAmapGet(CacheConfig.GEOCODE_CACHE,
+                "geocode:" + city + ":" + district, uri, requestTimeoutMs(amap), false);
         List<Map<String, Object>> geocodes = castList(body.get("geocodes"));
         Map<String, Object> first = geocodes.isEmpty() ? Map.of() : geocodes.get(0);
         double[] point = parseLocation(String.valueOf(first.getOrDefault("location", "0,0")));
         Map<String, Object> output = new LinkedHashMap<>(traceService.externalMeta(
-                "amap", "real", sourceUrl, String.valueOf(body.getOrDefault("infocode", response.statusCode()))));
+                "amap", "real", sourceUrl, String.valueOf(body.getOrDefault("infocode", body.getOrDefault("httpStatus", "")))));
         output.put("address", district);
         output.put("count", geocodes.size());
         output.put("location", first.getOrDefault("location", ""));
@@ -371,7 +363,9 @@ public class AmapPoiSearchTool {
                 poi.isIndoor(),
                 poi.isSocial(),
                 poi.isTicketProblem(),
-                poi.isSeatProblem()
+                poi.isSeatProblem(),
+                poi.getSourceProvider(),
+                poi.getSourcePoiId()
         );
     }
 
@@ -468,6 +462,31 @@ public class AmapPoiSearchTool {
         } finally {
             requestLimiter.releaseSlot();
         }
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> cachedAmapGet(String cacheName, String cacheKey, URI uri, int timeoutMs,
+                                              boolean retryQpsLimit) throws Exception {
+        Cache cache = cacheManager.getCache(cacheName);
+        if (cache != null) {
+            Cache.ValueWrapper cached = cache.get(cacheKey);
+            if (cached != null && cached.get() instanceof Map<?, ?> map) {
+                return (Map<String, Object>) map;
+            }
+        }
+        Map<String, Object> body = Map.of();
+        int attempts = retryQpsLimit ? 3 : 1;
+        for (int attempt = 0; attempt < attempts; attempt++) {
+            body = sendAmapGet(uri, timeoutMs);
+            if (!retryQpsLimit || !isQpsLimited(body)) {
+                break;
+            }
+            requestLimiter.backoff(attempt);
+        }
+        if (cache != null && !isQpsLimited(body)) {
+            cache.put(cacheKey, body);
+        }
+        return body;
     }
 
     private int parseInt(Object value) {

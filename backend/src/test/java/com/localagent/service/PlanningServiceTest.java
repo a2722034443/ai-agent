@@ -86,7 +86,299 @@ class PlanningServiceTest {
         assertThat(confirmed.status()).isEqualTo("COMPLETED");
         assertThat(confirmed.execution()).containsKey("orders");
         assertThat(confirmed.execution()).containsKey("shareMessage");
-        assertThat(confirmed.execution().toString()).doesNotContain("confirmed", "booking", "delivery");
+        assertThat(confirmed.execution().get("shareMessage").toString())
+                .contains("模拟执行")
+                .doesNotContain("confirmed", "booking", "delivery");
+        assertThat(confirmed.execution().get("orders").toString())
+                .contains("actionLabel=打车", "actionLabel=订座", "statusLabel=已确认");
+    }
+
+    @Test
+    void confirmBuildsStructuredMockExecutionWithRideBookingAndFallbacks() {
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                new PlanRequest(
+                        "今天下午2点在大连星海广场带爸妈和孩子玩4小时，老人少走路，孩子想看儿童剧，晚饭要家庭海鲜，预算900元，最好能直接帮我打车和订座",
+                        null,
+                        null,
+                        Map.of("group", "两个老人、两个大人、一个孩子"),
+                        null,
+                        null
+                )
+        );
+
+        assertThat(response.status()).as(response.clarification().toString()).isEqualTo("READY");
+        assertThat(response.trace()).anyMatch(t -> "TicketAvailabilityTool".equals(t.get("tool")));
+        assertThat(response.trace()).anyMatch(t -> "RestaurantAvailabilityTool".equals(t.get("tool")));
+
+        PlanResponse confirmed = planningService.confirm(response.planId(), 1);
+
+        assertThat(confirmed.status()).isEqualTo("COMPLETED");
+        assertThat(confirmed.execution().get("mode")).isEqualTo("mock");
+        assertThat(confirmed.execution().get("provider")).isEqualTo("local-mock");
+        assertThat(confirmed.execution()).containsKeys("orders", "executionSteps", "incidents", "fallbackOptions", "shareMessage");
+        assertThat(confirmed.execution().get("orders").toString())
+                .contains("ride_hailing", "restaurant_reservation", "ticket_booking", "provider=mock")
+                .contains("模拟单-");
+        assertThat(confirmed.execution().get("executionSteps").toString())
+                .contains("打车", "订座", "购票", "分享");
+        assertThat(confirmed.execution().get("incidents").toString())
+                .contains("NO_SEAT", "NO_TICKET");
+        assertThat(confirmed.execution().get("fallbackOptions").toString())
+                .contains("fallbackTarget", "originalTarget", "reason");
+        assertThat(confirmed.execution().get("shareMessage").toString())
+                .contains("模拟执行", "打车", "订座");
+    }
+
+    @Test
+    void explicitPoiRouteWithStartEndSoloAndBudgetDoesNotAskClarification() {
+        String message = "我今天下午想在大连星海广场玩，14:00 出发，先去大连世界博览广场看展，然后去海味当家・蒸锅海鲜 (星海广场店) 吃海鲜，之后喝杯咖啡，18:00 要到家，帮我规划顺路的路线，还要帮我把博览广场的门票订了，餐厅的座位订了，还有回家的车也帮我提前叫了，预算 300 以内。";
+
+        PlanResponse response = planningService.createPlan("test-token", message);
+
+        assertThat(response.status()).as(response.clarification().toString()).isEqualTo("READY");
+        assertThat(response.clarification()).isEmpty();
+        assertThat(response.intent().get("group").toString()).contains("total=1", "单人");
+        assertThat(response.intent().get("time_window").toString())
+                .contains("start=14:00", "end=18:00", "durationMinutes=240");
+        assertThat(response.intent().get("soft_preferences").toString()).contains("budgetAmount=300");
+        assertThat(response.intent().get("explicitPois").toString())
+                .contains("大连世界博览广场", "海味当家・蒸锅海鲜 (星海广场店)", "咖啡");
+    }
+
+    @Test
+    void explicitPoiRoutePreservesUserSpecifiedPoisAndGeneratesDifferentiatedOptions() {
+        String message = "我今天下午想在大连星海广场玩，14:00 出发，先去大连世界博览广场看展，然后去海味当家・蒸锅海鲜 (星海广场店) 吃海鲜，之后喝杯咖啡，18:00 要到家，帮我规划顺路的路线，还要帮我把博览广场的门票订了，餐厅的座位订了，还有回家的车也帮我提前叫了，预算 300 以内。";
+
+        PlanResponse response = planningService.createPlan("test-token", message);
+
+        assertThat(response.status()).as(response.clarification().toString()).isEqualTo("READY");
+        assertThat(response.options()).hasSize(3);
+        assertThat(response.options()).extracting(option -> option.get("name")).doesNotHaveDuplicates();
+        assertThat(response.options()).extracting(option -> option.get("tagline")).doesNotHaveDuplicates();
+        assertThat(response.options().toString())
+                .contains("大连世界博览广场", "海味当家・蒸锅海鲜 (星海广场店)", "咖啡")
+                .doesNotContain("奕景海鲜酒家", "停车场", "入口");
+        assertThat(response.options().toString())
+                .contains("步行", "短驳", "高效")
+                .contains("靠窗", "快速通道", "快车");
+        response.options().forEach(option -> {
+            @SuppressWarnings("unchecked")
+            List<Map<String, Object>> timeline = (List<Map<String, Object>>) option.get("timeline");
+            assertThat(timeline).hasSizeGreaterThanOrEqualTo(3);
+            assertThat(timeline.get(0).get("name")).isEqualTo("大连世界博览广场");
+            assertThat(timeline.toString()).contains("海味当家・蒸锅海鲜 (星海广场店)");
+            assertThat((Integer) option.get("totalMinutes")).isLessThanOrEqualTo(240);
+        });
+    }
+
+    @Test
+    void explicitPoiExecutionRecoversNoTicketNoSeatAndTimeConflict() {
+        String message = "我今天下午想在大连星海广场玩，14:00 出发，先去大连科学剧场无票看演出，然后去家庭海鲜餐厅满员吃饭，之后喝杯咖啡，16:00 要到家，帮我把门票订了、餐厅座位订了、回家的车也提前叫了，预算 500 以内。";
+
+        PlanResponse response = planningService.createPlan("test-token", message);
+
+        assertThat(response.status()).as(response.clarification().toString()).isEqualTo("READY");
+        assertThat(response.options()).hasSize(3);
+        assertThat(response.trace()).anyMatch(t -> "ExceptionRecoveryTool".equals(t.get("tool")));
+        assertThat(response.options().get(0).toString())
+                .contains("TIME_CONFLICT")
+                .contains("大连科学剧场无票", "家庭海鲜餐厅满员", "咖啡");
+
+        PlanResponse confirmed = planningService.confirm(response.planId(), 1);
+
+        assertThat(confirmed.status()).isEqualTo("COMPLETED");
+        assertThat(confirmed.execution().get("mode")).isEqualTo("mock");
+        assertThat(confirmed.execution().get("provider")).isEqualTo("local-mock");
+        assertThat(confirmed.execution().get("orders").toString())
+                .contains("ride_hailing", "ticket_booking", "restaurant_reservation");
+        assertThat(confirmed.execution().get("incidents").toString())
+                .contains("NO_TICKET", "NO_SEAT", "TIME_CONFLICT", "RECOVERED");
+        assertThat(confirmed.execution().get("fallbackOptions").toString())
+                .contains("同类型室内活动", "同区域家庭餐厅", "压缩停留时间");
+        assertThat(confirmed.execution().get("executionSteps").toString())
+                .contains("活动购票已处理", "餐厅订座已处理", "行程冲突已处理", "分享消息已生成");
+    }
+
+    @Test
+    void friendsJinganScenarioGeneratesMeaningfullyDifferentOptionsWithinBudget() {
+        PlanResponse clarification = planningService.createPlan(
+                "test-token",
+                "今天晚上 7 点在上海静安寺附近，4 个朋友，预算 800 元，想先找一个有意思的地方再吃饭，路线不要太折腾。"
+        );
+
+        assertThat(clarification.status()).isEqualTo("NEEDS_CLARIFICATION");
+        assertThat(clarification.clarification().get("missingFields").toString())
+                .contains("duration")
+                .doesNotContain("group", "budget");
+
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                new PlanRequest(
+                        "3小时左右",
+                        null,
+                        null,
+                        Map.of("duration", "3小时左右"),
+                        clarification.planId(),
+                        clarification.threadId()
+                )
+        );
+
+        assertThat(response.status()).as(response.clarification().toString()).isEqualTo("READY");
+        assertThat(response.options()).hasSize(3);
+        assertThat(response.options()).extracting(option -> option.get("name")).doesNotHaveDuplicates();
+        assertThat(response.options()).extracting(option -> option.get("tagline")).doesNotHaveDuplicates();
+        assertThat(response.options()).extracting(option -> option.get("variantStrategy")).doesNotHaveDuplicates();
+        assertThat(response.options()).allSatisfy(option ->
+                assertThat((Integer) option.get("budgetEstimate")).isLessThanOrEqualTo(800));
+
+        List<String> diningNames = response.options().stream()
+                .map(option -> String.valueOf(option.get("diningName")))
+                .distinct()
+                .toList();
+        List<String> lastStops = response.options().stream()
+                .map(option -> String.valueOf(option.get("lastStop")))
+                .distinct()
+                .toList();
+        assertThat(diningNames).hasSizeGreaterThanOrEqualTo(2);
+        assertThat(lastStops).hasSizeGreaterThanOrEqualTo(2);
+        assertThat(response.options().toString())
+                .contains("轻松", "热闹", "高效")
+                .doesNotContain("预算约900元");
+    }
+
+    @Test
+    void currentLocationCoordinatesCanUseExpandedNearbyRouteWithoutBlocking() {
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                new PlanRequest(
+                        "地点：当前位置 121.767215,39.045065；游玩时长：4小时；同行人：2大1小；预算：400元；开始时间：早上7点",
+                        3,
+                        "标准",
+                        Map.of(
+                                "location", "当前位置 121.767215,39.045065",
+                                "duration", "4小时",
+                                "group", "2大1小",
+                                "budget", "400元",
+                                "timeWindow", "早上7点"
+                        ),
+                        null,
+                        null
+                )
+        );
+
+        assertThat(response.status()).as(response.warnings().toString()).isEqualTo("READY");
+        assertThat(response.options()).isNotEmpty();
+        assertThat(response.intent().get("location").toString())
+                .contains("121.767215", "39.045065", "当前位置");
+        assertThat(response.intent().get("time_window").toString())
+                .contains("start=07:00", "durationMinutes=240");
+        assertThat(response.options().get(0).get("route").toString())
+                .contains("distanceKm", "travelMinutes");
+        assertThat(response.warnings().toString()).contains("扩大搜索范围");
+    }
+
+    @Test
+    void currentLocationWithoutCoordinatesAsksForConcreteAnchorInsteadOfUsingDalianDefault() {
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                new PlanRequest(
+                        "地点：当前位置；游玩时长：4小时；同行人：2大1小；预算：400元；开始时间：早上7点",
+                        3,
+                        "标准",
+                        Map.of(
+                                "location", "当前位置",
+                                "duration", "4小时",
+                                "group", "2大1小",
+                                "budget", "400元",
+                                "timeWindow", "早上7点"
+                        ),
+                        null,
+                        null
+                )
+        );
+
+        assertThat(response.status()).isEqualTo("NEEDS_CLARIFICATION");
+        assertThat(response.options()).isEmpty();
+        assertThat(response.clarification().get("missingFields").toString()).contains("location");
+        assertThat(response.intent().get("location").toString())
+                .contains("needsConcreteAnchor=true")
+                .doesNotContain("121.588", "38.883", "大连星海广场");
+        assertThat(response.trace()).noneMatch(t -> "AmapPoiSearchTool".equals(t.get("tool")));
+    }
+
+    @Test
+    void overStrictMixedRouteLimitReturnsShortestRealFallbackInsteadOfBlocking() {
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                new PlanRequest(
+                        "地点：当前位置 121.470000,38.883000；游玩时长：4小时；同行人：2大1小；预算：800元；开始时间：早上9点",
+                        3,
+                        "标准",
+                        Map.of(
+                                "location", "当前位置 121.470000,38.883000",
+                                "duration", "4小时",
+                                "group", "2大1小",
+                                "budget", "800元",
+                                "timeWindow", "早上9点"
+                        ),
+                        null,
+                        null
+                )
+        );
+
+        assertThat(response.status()).as(response.warnings().toString()).isEqualTo("READY");
+        assertThat(response.options()).isNotEmpty();
+        assertThat(response.warnings().toString()).contains("路线距离偏长", "短驳");
+        assertThat(response.trace().toString()).contains("路线距离过远");
+        response.options().forEach(option -> {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> route = (Map<String, Object>) option.get("route");
+            assertThat(((Number) route.get("distanceKm")).doubleValue()).isGreaterThan(10.0);
+            assertThat(route.toString()).contains("distanceLimitKm");
+        });
+    }
+
+    @Test
+    void functionalAcceptanceMatrixCoversMultiOriginIncidentsDeadlineAndLocationTrust() {
+        String message = "今天14:00我和两个朋友在大连星海广场汇合，我在大连世界博览广场，朋友A在星海会展中心，朋友B在大连拿库古典车博览馆，先去大连科学剧场无票看演出，然后去家庭海鲜餐厅满员吃饭，之后喝杯咖啡，17:00要到家，预算900以内，帮我订票订座并提前叫车。";
+
+        PlanResponse response = planningService.createPlan("test-token", message);
+
+        assertThat(response.status()).as(response.clarification().toString()).isEqualTo("READY");
+        assertThat(response.intent().get("group").toString()).contains("total=3", "朋友同行");
+        assertThat(response.intent().toString())
+                .contains("multiOrigin")
+                .contains("大连世界博览广场", "星海会展中心", "大连拿库古典车博览馆")
+                .contains("locationTrust", "confidence", "reason");
+        assertThat(response.options()).hasSize(3);
+        assertThat(response.options().get(0).toString())
+                .contains("多起点汇合", "TIME_CONFLICT", "大连科学剧场无票", "家庭海鲜餐厅满员");
+        assertThat(response.options().get(0).get("timeline").toString())
+                .contains("咖啡店")
+                .doesNotContain("之后喝杯咖啡");
+        response.options().forEach(option -> {
+            assertThat((Integer) option.get("totalMinutes")).isLessThanOrEqualTo(180);
+            assertThat(option.get("routeHighlights").toString()).contains("多起点汇合", "坐标");
+        });
+
+        PlanResponse confirmed = planningService.confirm(response.planId(), 1);
+        assertThat(confirmed.execution().get("incidents").toString())
+                .contains("NO_TICKET", "NO_SEAT", "TIME_CONFLICT");
+        assertThat(confirmed.execution().get("executionSteps").toString())
+                .contains("多起点接人", "打车", "购票", "订座");
+    }
+
+    @Test
+    void functionalAcceptanceMatrixBlocksCrossCityRouteInsteadOfPretendingFeasible() {
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                "今天14:00我和朋友在上海人民广场碰面，但还想顺路去北京故宫看展，然后回上海吃小杨生煎，18:00结束，预算800元，两个人。"
+        );
+
+        assertThat(response.status()).isEqualTo("BLOCKED");
+        assertThat(response.warnings().toString()).contains("跨城市", "上海", "北京");
+        assertThat(response.trace().toString()).contains("CROSS_CITY");
     }
 
     @Test
@@ -146,7 +438,9 @@ class PlanningServiceTest {
 
         assertThat(response.status()).isEqualTo("NEEDS_CLARIFICATION");
         assertThat(response.clarification().get("missingFields").toString())
-                .contains("timeWindow", "duration", "group", "budget");
+                .contains("timeWindow", "duration", "budget")
+                .doesNotContain("group");
+        assertThat(response.intent().get("group").toString()).contains("单人", "total=1");
         assertThat(response.intent().get("hard_constraints").toString())
                 .contains("POI不可用需替换", "排队过长需替换");
         assertThat(response.intent().get("time_window").toString()).doesNotContain("durationMinutes=60");
@@ -180,5 +474,137 @@ class PlanningServiceTest {
         assertThat(response.clarification().get("missingFields").toString()).doesNotContain("group", "duration");
         assertThat(response.intent().get("group").toString()).contains("total=1", "单人");
         assertThat(response.intent().get("time_window").toString()).contains("durationMinutes=300");
+    }
+
+    @Test
+    void nonDalianCityMockPlanningDoesNotLeakDalianPois() {
+        PlanResponse clarification = planningService.createPlan(
+                "test-token",
+                "今天晚上7点在上海静安寺附近，4个朋友，预算800元，想先找一个有意思的地方再吃饭，路线不要太折腾。"
+        );
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                new PlanRequest(
+                        "3小时左右",
+                        3,
+                        "标准",
+                        Map.of("duration", "3小时左右"),
+                        clarification.planId(),
+                        clarification.threadId()
+                )
+        );
+
+        assertThat(response.status()).as(response.clarification().toString()).isEqualTo("READY");
+        assertThat(response.intent().get("location").toString()).contains("上海", "静安寺");
+        assertThat(response.options().toString()).doesNotContain("大连", "星海");
+    }
+
+    @Test
+    void compactFamilyAndTwoPersonExpressionsDoNotAskGroupAgain() {
+        PlanResponse coordinateFamily = planningService.createPlan(
+                "test-token",
+                "地点：当前位置 121.767215,39.045065；游玩时长：4小时；同行人：2大1小；预算：400元；开始时间：早上7点"
+        );
+        assertThat(String.valueOf(coordinateFamily.clarification().get("missingFields"))).doesNotContain("group");
+        assertThat(coordinateFamily.intent().get("group").toString()).contains("total=3", "2大1小");
+
+        PlanResponse twoPeople = planningService.createPlan(
+                "test-token",
+                "今天15:00在上海人民广场附近，两个人，预算500元，担心下雨，想优先室内活动、吃饭和咖啡，玩3小时。"
+        );
+        assertThat(String.valueOf(twoPeople.clarification().get("missingFields"))).doesNotContain("group");
+        assertThat(twoPeople.intent().get("group").toString()).contains("total=2", "两个人");
+    }
+
+    @Test
+    void agedChildFamilyExpressionDoesNotAskGroupAgain() {
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                "今天下午2点在大连星海广场附近，两个大人一个5岁孩子，预算600元，想安排亲子活动和晚餐，时间4小时左右。"
+        );
+
+        assertThat(String.valueOf(response.clarification().get("missingFields"))).doesNotContain("group");
+        assertThat(response.intent().get("group").toString()).contains("total=3", "家庭亲子", "childAge=5");
+        assertThat(response.status()).as(response.clarification().toString()).isEqualTo("READY");
+    }
+
+    @Test
+    void shanghaiNanjingRoadMultiOriginIsNotCrossCityBlocked() {
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                "今天14:00我和两个朋友在上海人民广场汇合，我在上海博物馆，朋友A在南京东路，朋友B在黄陂南路，想一起吃饭看电影，18:00结束，预算800元。"
+        );
+
+        assertThat(response.status()).as(response.warnings().toString()).isNotEqualTo("BLOCKED");
+        assertThat(response.warnings().toString()).doesNotContain("跨城市");
+        assertThat(response.intent().get("citySignals").toString()).contains("上海").doesNotContain("南京");
+        assertThat(String.valueOf(response.intent().get("explicitPois"))).doesNotContain("00我和两个朋友", "一起吃饭看电影");
+        assertThat(response.options().toString()).doesNotContain("00我和两个朋友", "一起吃饭看电影");
+    }
+
+    @Test
+    void genericDemandPhrasesAreNotTreatedAsExplicitPoiNames() {
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                "今天15:00在上海人民广场附近，两个人，预算500元，担心下雨，想优先室内活动、吃饭和咖啡，玩3小时。"
+        );
+
+        assertThat(response.status()).as(response.clarification().toString()).isEqualTo("READY");
+        assertThat(String.valueOf(response.intent().get("explicitPois"))).doesNotContain("吃饭和咖啡", "室内活动");
+        assertThat(response.options().toString()).doesNotContain("吃饭和咖啡", "00在上海人民广场");
+    }
+
+    @Test
+    void requestingFivePlansReturnsOnlyDifferentiatedOptionsWithShortageWarning() {
+        PlanResponse clarification = planningService.createPlan("test-token", "附近想玩");
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                new PlanRequest(
+                        "地点：当前位置 121.767215,39.045065；游玩时长：4小时；同行人：2大1小；预算：400元；开始时间：早上9点",
+                        5,
+                        "标准",
+                        Map.of(
+                                "location", "当前位置 121.767215,39.045065",
+                                "duration", "4小时",
+                                "group", "2大1小",
+                                "budget", "400元",
+                                "timeWindow", "早上9点"
+                        ),
+                        clarification.planId(),
+                        clarification.threadId()
+                )
+        );
+
+        assertThat(response.status()).as(response.clarification().toString()).isEqualTo("READY");
+        assertThat(response.options()).hasSizeLessThanOrEqualTo(3);
+        assertThat(response.options()).extracting(option -> option.get("name")).doesNotHaveDuplicates();
+        assertThat(response.options()).extracting(option -> option.get("variantStrategy")).doesNotHaveDuplicates();
+        assertThat(response.warnings().toString()).contains("可行方案数量不足", "少于你请求的 5 套");
+    }
+
+    @Test
+    void explicitThreePoiRequestKeepsAllSpecifiedPoisInEveryOption() {
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                "今天14:00在大连星海广场，我自己，预算300元，先去大连世界博览广场，然后去海味当家・蒸锅海鲜 (星海广场店)，最后去咖啡店，18:00结束，请给3套不同交通和预定细节的方案。"
+        );
+
+        assertThat(response.status()).as(response.clarification().toString()).isEqualTo("READY");
+        response.options().forEach(option -> assertThat(option.get("timeline").toString())
+                .contains("大连世界博览广场", "海味当家・蒸锅海鲜 (星海广场店)", "咖啡店")
+                .doesNotContain("绿园轻食餐厅", "家庭海鲜餐厅", "四人烧烤餐厅", "大连科学剧场", "新影艺术馆"));
+    }
+
+    @Test
+    void hardEndCompressionReturnsTimeConflictRecoveryInsteadOfGenericPoiBlock() {
+        PlanResponse response = planningService.createPlan(
+                "test-token",
+                "今天14:00我自己在大连星海广场附近，预算200元，想先逛大连世界博览广场，再吃海鲜，16:00必须到家，全程步行。"
+        );
+
+        assertThat(response.status()).as(response.warnings().toString()).isEqualTo("READY");
+        assertThat(response.options()).isNotEmpty();
+        assertThat(response.options().toString()).contains("TIME_CONFLICT");
+        assertThat(response.warnings().toString()).doesNotContain("真实地点不足");
     }
 }

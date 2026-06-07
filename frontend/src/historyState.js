@@ -50,6 +50,7 @@ export function restoreThreadState(detail, normalizePlans) {
     currentStep: payload.currentStep || (messages.length ? 'need' : 'need'),
     activeView: payload.currentView || 'chat',
     mapOrigin: payload.mapOrigin || {},
+    execution: payload.execution || {},
     executionSteps: Array.isArray(payload.executionSteps) ? payload.executionSteps : [],
     selectedRank: Number.isFinite(Number(payload.selectedRank)) ? Number(payload.selectedRank) : null,
     threadTitle: detail?.title || ''

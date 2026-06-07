@@ -2,6 +2,7 @@ package com.localagent.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.localagent.config.CacheConfig;
 import com.localagent.config.ExternalClientProperties;
 import com.localagent.model.Poi;
 import java.net.URI;
@@ -20,6 +21,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -37,6 +40,7 @@ public class AmapRouteEstimateTool {
     private final ObjectMapper objectMapper;
     private final AmapRequestLimiter requestLimiter;
     private final HttpClient httpClient;
+    private final CacheManager cacheManager;
     private final boolean allowMockPoi;
     private final Map<UUID, Map<String, Map<String, Object>>> segmentCaches = new ConcurrentHashMap<>();
     private final ExecutorService executor = Executors.newCachedThreadPool();
@@ -45,6 +49,7 @@ public class AmapRouteEstimateTool {
                                  ToolTraceService traceService, ObjectMapper objectMapper,
                                  AmapRequestLimiter requestLimiter,
                                  @Qualifier("amapHttpClient") HttpClient httpClient,
+                                 CacheManager cacheManager,
                                  @Value("${app.allow-mock-poi:false}") boolean allowMockPoi) {
         this.properties = properties;
         this.mockTools = mockTools;
@@ -52,6 +57,7 @@ public class AmapRouteEstimateTool {
         this.objectMapper = objectMapper;
         this.requestLimiter = requestLimiter;
         this.httpClient = httpClient;
+        this.cacheManager = cacheManager;
         this.allowMockPoi = allowMockPoi;
     }
 
@@ -145,6 +151,11 @@ public class AmapRouteEstimateTool {
         if (cached != null) {
             return cached;
         }
+        Map<String, Object> sharedCached = sharedCachedSegment(cacheKey);
+        if (!sharedCached.isEmpty()) {
+            segmentCache.put(cacheKey, sharedCached);
+            return sharedCached;
+        }
         long start = System.currentTimeMillis();
         ExternalClientProperties.Amap amap = properties.getAmap();
         RouteMode mode = routeMode(from, to);
@@ -189,8 +200,29 @@ public class AmapRouteEstimateTool {
                 Map.of("from", from.getName(), "to", to.getName(), "routeMode", mode.name()), output);
         if (durationSeconds > 0 && distanceMeters > 0) {
             segmentCache.put(cacheKey, output);
+            putSharedCachedSegment(cacheKey, output);
         }
         return output;
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> sharedCachedSegment(String cacheKey) {
+        Cache cache = cacheManager.getCache(CacheConfig.ROUTE_CACHE);
+        if (cache == null) {
+            return Map.of();
+        }
+        Cache.ValueWrapper cached = cache.get(cacheKey);
+        if (cached == null || !(cached.get() instanceof Map<?, ?> map)) {
+            return Map.of();
+        }
+        return (Map<String, Object>) map;
+    }
+
+    private void putSharedCachedSegment(String cacheKey, Map<String, Object> output) {
+        Cache cache = cacheManager.getCache(CacheConfig.ROUTE_CACHE);
+        if (cache != null) {
+            cache.put(cacheKey, output);
+        }
     }
 
     private String segmentKey(Poi from, Poi to) {

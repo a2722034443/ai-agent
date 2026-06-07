@@ -2,6 +2,7 @@ package com.localagent.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.localagent.config.ExternalClientProperties;
 import com.localagent.dto.ApiDtos.PlanRequest;
 import com.localagent.dto.ApiDtos.PlanResponse;
 import com.localagent.model.ChatMessage;
@@ -49,7 +50,7 @@ public class PlanningService {
     private static final double WALKING_DIRECT_PREFILTER_KM = 4.0;
     private static final double MIXED_DIRECT_PREFILTER_KM = 12.5;
     private static final double DRIVING_DIRECT_PREFILTER_KM = 28.0;
-    private static final int MAX_ROUTE_ATTEMPTS = 4;
+    private static final int MAX_ROUTE_ATTEMPTS = 12;
 
     private final PlanSessionRepository planSessionRepository;
     private final PlanOptionRepository planOptionRepository;
@@ -62,11 +63,13 @@ public class PlanningService {
     private final IntentParserAgent intentParserAgent;
     private final ClarificationService clarificationService;
     private final AmapWeatherTool weatherTool;
+    private final AmapPoiDetailTool poiDetailTool;
     private final PlanValidationService planValidationService;
     private final PromptCatalog promptCatalog;
     private final ToolTraceService toolTraceService;
     private final HistoryService historyService;
     private final ObjectMapper objectMapper;
+    private final ExternalClientProperties properties;
     private final boolean allowMockPoi;
     private final ExecutorService optionalToolExecutor = Executors.newFixedThreadPool(4);
 
@@ -81,11 +84,13 @@ public class PlanningService {
                            IntentParserAgent intentParserAgent,
                            ClarificationService clarificationService,
                            AmapWeatherTool weatherTool,
+                           AmapPoiDetailTool poiDetailTool,
                            PlanValidationService planValidationService,
                            PromptCatalog promptCatalog,
                            ToolTraceService toolTraceService,
                            HistoryService historyService,
                            ObjectMapper objectMapper,
+                           ExternalClientProperties properties,
                            @Value("${app.allow-mock-poi:false}") boolean allowMockPoi) {
         this.planSessionRepository = planSessionRepository;
         this.planOptionRepository = planOptionRepository;
@@ -98,11 +103,13 @@ public class PlanningService {
         this.intentParserAgent = intentParserAgent;
         this.clarificationService = clarificationService;
         this.weatherTool = weatherTool;
+        this.poiDetailTool = poiDetailTool;
         this.planValidationService = planValidationService;
         this.promptCatalog = promptCatalog;
         this.toolTraceService = toolTraceService;
         this.historyService = historyService;
         this.objectMapper = objectMapper;
+        this.properties = properties;
         this.allowMockPoi = allowMockPoi;
     }
 
@@ -134,6 +141,16 @@ public class PlanningService {
             intent = clarificationService.mergeAnswers(intent, request == null ? null : request.clarificationAnswers());
             applyRequestPreferences(intent, request);
             ensurePoiSearchStrategy(intent);
+            Map<String, Object> acceptanceBlock = functionalAcceptanceBlock(session.getId(), intent, message);
+            if (!acceptanceBlock.isEmpty()) {
+                session.markBlocked(toJson(intent), toJson(acceptanceBlock));
+                planSessionRepository.save(session);
+                ChatMessage assistant = historyService.appendAssistant(thread.getId(), session.getId(), parentPlanSessionId,
+                        ChatMessageKind.ASSISTANT_ERROR,
+                        String.valueOf(acceptanceBlock.getOrDefault("message", "这个行程暂时不可行，我已经标出原因。")),
+                        planResultPayload(session.getId(), intent, acceptanceBlock, Map.of(), "chat", "blocked", null));
+                return toResponse(session.getId(), assistant.getId());
+            }
             Map<String, Object> clarification = clarificationService.buildClarification(session.getId(), intent, message);
             if (!clarification.isEmpty()) {
                 Map<String, Object> result = new LinkedHashMap<>();
@@ -157,11 +174,12 @@ public class PlanningService {
                     () -> weatherTool.weather(session.getId(), planningIntent), optionalToolExecutor);
             CompletableFuture<List<Map<String, Object>>> evidenceFuture = CompletableFuture.supplyAsync(
                     () -> searchVerifierAgent.verify(session.getId(), planningIntent, planningMessage), optionalToolExecutor);
-            List<Poi> candidates = poiSearchTool.searchPois(session.getId(), intent);
+            List<Poi> candidates = mergeExplicitPoiCandidates(intent, poiSearchTool.searchPois(session.getId(), intent));
             Map<String, Object> weather = optionalWeather(session.getId(), weatherFuture);
             List<Map<String, Object>> webEvidence = optionalEvidence(session.getId(), evidenceFuture);
             List<Map<String, Object>> warnings = new ArrayList<>(weatherWarnings(weather));
             List<Map<String, Object>> options = buildOptions(session.getId(), intent, candidates, weather, warnings);
+            addPoiDetailWarnings(session.getId(), options, warnings);
             planValidationService.validate(session.getId(), options, candidates);
 
             Map<String, Object> result = new LinkedHashMap<>();
@@ -213,13 +231,21 @@ public class PlanningService {
     private Map<String, Object> buildIntent(UUID planId, PlanRequest request, String message) {
         Map<String, Object> parsed = shouldSkipIntentParse(request)
                 ? new LinkedHashMap<>()
-                : intentParserAgent.fastParse(planId, message);
+                : parseIntent(planId, message);
         Map<String, Object> previous = previousIntent(request);
         Map<String, Object> intent = mergeIntent(previous, parsed);
         String rawMessage = rawMessage(previous, message);
         intent.put("rawMessage", rawMessage);
         clarificationService.ensureUserFacts(intent, rawMessage);
         return intent;
+    }
+
+    private Map<String, Object> parseIntent(UUID planId, String message) {
+        String mode = properties.getLlm().getIntentParserMode();
+        if ("rule-only".equalsIgnoreCase(mode)) {
+            return intentParserAgent.fastParse(planId, message);
+        }
+        return intentParserAgent.parse(planId, message);
     }
 
     private boolean shouldSkipIntentParse(PlanRequest request) {
@@ -342,14 +368,8 @@ public class PlanningService {
         Map<String, Object> option = findOption(id, rank);
         session.markExecuting();
         planSessionRepository.save(session);
-        List<Map<String, Object>> orders = tools.book(id, option);
-        Map<String, Object> gift = tools.delivery(id, option);
-        String shareMessage = tools.share(id, option);
-        Map<String, Object> execution = new LinkedHashMap<>();
-        execution.put("orders", orders);
-        execution.put("gift", gift);
-        execution.put("shareMessage", shareMessage);
-        execution.put("allSuccess", true);
+        Map<String, Object> execution = tools.executePlan(id, option);
+        execution.put("selectedRank", rank);
         session.markCompleted(toJson(execution));
         planSessionRepository.save(session);
         ChatMessage assistant = historyService.appendAssistant(thread.getId(), session.getId(), session.getParentPlanSessionId(),
@@ -495,6 +515,11 @@ public class PlanningService {
 
     private List<Map<String, Object>> buildOptions(UUID planId, Map<String, Object> intent, List<Poi> candidates,
                                                    Map<String, Object> weather, List<Map<String, Object>> warnings) {
+        if (hasCompleteExplicitPoiRoute(intent)) {
+            List<Map<String, Object>> explicitOptions = buildExplicitPoiOptions(planId, intent, candidates, weather);
+            explicitOptions.forEach(option -> enrichFunctionalAcceptanceFields(option, intent));
+            return explicitOptions;
+        }
         CandidatePool candidatePool = nearbyCandidates(candidates, intent);
         List<Poi> nearby = candidatePool.pois();
         if (candidatePool.expanded()) {
@@ -512,31 +537,39 @@ public class PlanningService {
         List<Poi> extras = tools.sortCandidates(nearby.stream()
                 .filter(poi -> poi.getType() == PoiType.EXTRA)
                 .toList(), intent);
+        int requestedPlanCount = planCount(intent);
+        int planCount = differentiatedPlanCount(requestedPlanCount, intent);
         if (extras.isEmpty()) {
             extras = activities.stream().skip(Math.min(1, activities.size())).toList();
+        } else if (extras.size() < Math.min(3, planCount)) {
+            extras = expandExtraCandidates(extras, activities, planCount);
         }
         if (activities.isEmpty() || dining.isEmpty() || extras.isEmpty()) {
             throw new PlanBlockedException(planId, "amap", BlockMessages.NO_POI_FOUND, 422);
         }
 
-        int planCount = planCount(intent);
         int stopCount = stopCount(intent);
         int minimumPlanCount = Math.min(3, planCount);
         List<Map<String, Object>> options = new ArrayList<>();
         Set<String> signatures = new HashSet<>();
+        Set<String> usedActivities = new HashSet<>();
+        Set<String> usedDining = new HashSet<>();
+        Set<String> usedExtras = new HashSet<>();
+        Integer budgetLimit = budgetLimit(intent);
+        double directRouteLimitKm = directRoutePrefilterKm(intent, candidatePool);
+        double routeDistanceLimitKm = maxRouteDistanceKm(intent, candidatePool);
+        double fallbackRouteLimitKm = fallbackRouteDistanceKm(intent, candidatePool, routeDistanceLimitKm);
         int maxAttempts = Math.min(MAX_ROUTE_ATTEMPTS,
                 Math.max(minimumPlanCount, activities.size() * dining.size() * Math.max(1, extras.size())));
-        for (int attempt = 0; attempt < maxAttempts && options.size() < planCount; attempt++) {
-            Poi activity = chooseActivity(planId, activities, attempt % activities.size());
-            Poi restaurant = chooseRestaurant(planId, dining, (attempt / Math.max(1, activities.size())) % dining.size());
-            Poi extra = extras.get((attempt / Math.max(1, activities.size() * dining.size())) % extras.size());
-            List<Poi> stops = fitStopDurations(buildStops(activities, dining, extras, activity, restaurant, stopCount, attempt),
-                    durationMinutes(intent));
-            if (stops.stream().noneMatch(poi -> poi.getName().equals(extra.getName()))
-                    && !extra.getName().equals(activity.getName())
-                    && !extra.getName().equals(restaurant.getName())) {
-                stops = replaceLastNonDiningStop(stops, extra);
-            }
+        List<StopCandidate> stopCandidates = stopCandidates(planId, activities, dining, extras, stopCount,
+                durationMinutes(intent), intent);
+        List<RouteFallbackCandidate> routeFallbacks = new ArrayList<>();
+        List<TimeConflictFallbackCandidate> timeConflictFallbacks = new ArrayList<>();
+        int attempts = 0;
+        while (attempts < maxAttempts && options.size() < planCount && !stopCandidates.isEmpty()) {
+            StopCandidate candidate = takeBestCandidate(stopCandidates, usedActivities, usedDining, usedExtras, budgetLimit);
+            attempts++;
+            List<Poi> stops = candidate.stops();
             Poi origin = originPoi(intent);
             stops = optimizeStopOrder(origin, stops);
             if (!hasRequiredPoiCoverage(stops)) {
@@ -544,7 +577,7 @@ public class PlanningService {
                 continue;
             }
             List<Poi> routeStops = routeStops(origin, stops);
-            if (directRouteDistanceKm(routeStops) > directRoutePrefilterKm(intent)) {
+            if (directRouteDistanceKm(routeStops) > directRouteLimitKm) {
                 tools.recovery(planId, "路线直线距离预筛过远", signature(stops), "跳过该候选");
                 continue;
             }
@@ -562,8 +595,17 @@ public class PlanningService {
                 continue;
             }
             double distanceKm = ((Number) route.getOrDefault("distanceKm", 0)).doubleValue();
-            if (distanceKm > maxRouteDistanceKm(intent)) {
+            if (distanceKm > routeDistanceLimitKm) {
                 tools.recovery(planId, "路线距离过远", signature, "跳过该候选");
+                int totalMinutes = tools.totalMinutes(stops, ((Number) route.get("travelMinutes")).intValue());
+                if (!hasExplicitEnd(intent) && isTooShort(intent, totalMinutes)) {
+                    stops = extendFlexibleStop(stops, durationMinutes(intent) - totalMinutes);
+                    totalMinutes = tools.totalMinutes(stops, ((Number) route.get("travelMinutes")).intValue());
+                }
+                if (distanceKm <= fallbackRouteLimitKm && fitsDuration(intent, totalMinutes)) {
+                    routeFallbacks.add(new RouteFallbackCandidate(stops, route, totalMinutes, candidate,
+                            distanceKm, routeDistanceLimitKm));
+                }
                 continue;
             }
             int totalMinutes = tools.totalMinutes(stops, ((Number) route.get("travelMinutes")).intValue());
@@ -572,18 +614,50 @@ public class PlanningService {
                 totalMinutes = tools.totalMinutes(stops, ((Number) route.get("travelMinutes")).intValue());
             }
             if (fitsDuration(intent, totalMinutes)) {
-                options.add(option(options.size() + 1, stops, route, totalMinutes, intent, weather));
+                Map<String, Object> option = option(options.size() + 1, stops, route, totalMinutes, intent, weather);
+                applyGeneralVariant(option, options.size() + 1, intent);
+                options.add(option);
+                usedActivities.add(candidate.activityName());
+                usedDining.add(candidate.diningName());
+                usedExtras.add(candidate.extraName());
             } else {
                 tools.recovery(planId, "时间冲突", signature, "跳过该候选");
+                if (hasExplicitEnd(intent)) {
+                    List<Poi> compressed = forceFitStopDurations(stops,
+                            ((Number) route.get("travelMinutes")).intValue(), durationMinutes(intent));
+                    int compressedMinutes = tools.totalMinutes(compressed, ((Number) route.get("travelMinutes")).intValue());
+                    if (compressedMinutes <= durationMinutes(intent)) {
+                        timeConflictFallbacks.add(new TimeConflictFallbackCandidate(compressed, route,
+                                compressedMinutes, candidate));
+                    }
+                }
             }
         }
         if (options.isEmpty()) {
-            throw new PlanBlockedException(planId, "amap",
-                    "抱歉，真实地点不足以生成你要求数量的距离合理方案，请放宽地点范围、减少方案数量或稍后重试", 422);
+            options = routeDistanceFallbackOptions(routeFallbacks, planCount, intent, weather);
+            if (options.isEmpty()) {
+                options = timeConflictFallbackOptions(timeConflictFallbacks, planCount, intent, weather);
+                if (!options.isEmpty()) {
+                    warnings.add(warning("硬结束时间已压缩",
+                            "真实地点可用，但原停留节奏会超过结束时间；已保留压缩版方案，并标注 TIME_CONFLICT 恢复。"));
+                }
+            } else {
+                warnings.add(warning("路线距离偏长",
+                        "真实地点和路线服务已返回结果，但严格近场路线不足；已保留最短真实候选，建议用短驳打车或放宽距离。"));
+            }
+            if (options.isEmpty()) {
+                throw new PlanBlockedException(planId, "amap",
+                        "抱歉，真实地点不足以生成你要求数量的距离合理方案，请放宽地点范围、减少方案数量或稍后重试", 422);
+            }
         }
-        if (options.size() < planCount) {
+        if (options.size() < requestedPlanCount) {
             warnings.add(warning("可行方案数量不足",
-                    "真实地点和路线约束下仅生成 " + options.size() + " 套可行方案，少于你请求的 " + planCount + " 套。"));
+                    "真实地点和路线约束下仅生成 " + options.size() + " 套可行方案，少于你请求的 " + requestedPlanCount + " 套。"));
+        }
+        if (budgetLimit != null && options.stream().anyMatch(option ->
+                intValue(option.get("budgetEstimate")) != null && intValue(option.get("budgetEstimate")) > budgetLimit)) {
+            warnings.add(warning("部分方案超出预算",
+                    "预算内真实组合不足，已保留少量超预算备选；建议确认前放宽预算或减少停留点。"));
         }
 
         List<Map<String, Object>> sorted = options.stream()
@@ -593,8 +667,652 @@ public class PlanningService {
             int newRank = index + 1;
             sorted.get(index).put("rank", newRank);
             enrichCardContent(sorted.get(index), intent, newRank);
+            applyGeneralVariant(sorted.get(index), newRank, intent);
+            enrichFunctionalAcceptanceFields(sorted.get(index), intent);
         }
         return sorted;
+    }
+
+    private int rotatingIndex(int attempt, int previousSize, int size) {
+        if (size <= 1) {
+            return 0;
+        }
+        return Math.floorMod(attempt + attempt / Math.max(1, previousSize), size);
+    }
+
+    private List<StopCandidate> stopCandidates(UUID planId, List<Poi> activities, List<Poi> dining, List<Poi> extras,
+                                               int stopCount, int durationMinutes, Map<String, Object> intent) {
+        List<StopCandidate> candidates = new ArrayList<>();
+        int offset = 0;
+        for (int diningOffset = 0; diningOffset < dining.size(); diningOffset++) {
+            Poi restaurant = chooseRestaurant(planId, dining, diningOffset);
+            for (int extraOffset = 0; extraOffset < extras.size(); extraOffset++) {
+                Poi extra = extras.get(extraOffset);
+                for (int activityOffset = 0; activityOffset < activities.size(); activityOffset++) {
+                    Poi activity = chooseActivity(planId, activities, activityOffset);
+                    if (extra.getName().equals(activity.getName()) || extra.getName().equals(restaurant.getName())) {
+                        continue;
+                    }
+                    List<Poi> stops = fitStopDurations(buildStops(activities, dining, extras, activity, restaurant,
+                            extra, stopCount, offset++), durationMinutes);
+                    if (stops.stream().noneMatch(poi -> poi.getName().equals(extra.getName()))) {
+                        stops = replaceLastNonDiningStop(stops, extra);
+                    }
+                    int budget = budgetEstimate(stops, intent);
+                    candidates.add(new StopCandidate(stops, activity.getName(), restaurant.getName(), extra.getName(), budget));
+                }
+            }
+        }
+        candidates.sort(Comparator.comparingInt(StopCandidate::budget));
+        return candidates;
+    }
+
+    private StopCandidate takeBestCandidate(List<StopCandidate> candidates, Set<String> usedActivities,
+                                            Set<String> usedDining, Set<String> usedExtras, Integer budgetLimit) {
+        StopCandidate best = candidates.stream()
+                .max(Comparator.comparingDouble(candidate ->
+                        candidateScore(candidate, usedActivities, usedDining, usedExtras, budgetLimit)))
+                .orElse(candidates.get(0));
+        candidates.remove(best);
+        return best;
+    }
+
+    private double candidateScore(StopCandidate candidate, Set<String> usedActivities, Set<String> usedDining,
+                                  Set<String> usedExtras, Integer budgetLimit) {
+        return diversityScore(candidate, usedActivities, usedDining, usedExtras, budgetLimit);
+    }
+
+    private int diversityScore(StopCandidate candidate, Set<String> usedActivities, Set<String> usedDining,
+                               Set<String> usedExtras, Integer budgetLimit) {
+        int score = 0;
+        if (!usedActivities.contains(candidate.activityName())) score += 2;
+        if (!usedDining.contains(candidate.diningName())) score += 4;
+        if (!usedExtras.contains(candidate.extraName())) score += 3;
+        if (budgetLimit != null && candidate.budget() > budgetLimit) score -= 100;
+        score += Math.max(0, 5 - candidate.budget() / 100);
+        return score;
+    }
+
+    private List<Poi> expandExtraCandidates(List<Poi> extras, List<Poi> activities, int planCount) {
+        List<Poi> expanded = new ArrayList<>(extras);
+        int target = Math.min(3, planCount);
+        for (Poi activity : activities) {
+            if (expanded.size() >= target) {
+                break;
+            }
+            if (expanded.stream().noneMatch(poi -> poi.getName().equals(activity.getName()))) {
+                expanded.add(activity);
+            }
+        }
+        return expanded;
+    }
+
+    private List<Map<String, Object>> routeDistanceFallbackOptions(List<RouteFallbackCandidate> fallbacks,
+                                                                   int planCount, Map<String, Object> intent,
+                                                                   Map<String, Object> weather) {
+        List<Map<String, Object>> options = new ArrayList<>();
+        Set<String> signatures = new HashSet<>();
+        List<RouteFallbackCandidate> sorted = fallbacks.stream()
+                .sorted(Comparator.comparingDouble(RouteFallbackCandidate::distanceKm))
+                .toList();
+        for (RouteFallbackCandidate fallback : sorted) {
+            if (options.size() >= planCount) {
+                break;
+            }
+            String signature = signature(fallback.stops());
+            if (!signatures.add(signature)) {
+                continue;
+            }
+            Map<String, Object> route = new LinkedHashMap<>(fallback.route());
+            route.put("distanceLimitKm", fallback.strictLimitKm());
+            route.put("distancePolicy", "fallback_shortest_real_route");
+            route.put("transportSuggestion", "建议使用短驳打车或减少一个停留点");
+            Map<String, Object> option = option(options.size() + 1, fallback.stops(), route,
+                    fallback.totalMinutes(), intent, weather);
+            applyGeneralVariant(option, options.size() + 1, intent);
+            List<String> riskNotes = new ArrayList<>(castStringList(option.get("riskNotes")));
+            riskNotes.add("路线距离超过严格近场阈值，已作为最短真实路线保留；出发前建议确认是否接受短驳。");
+            option.put("riskNotes", riskNotes);
+            List<String> fitReasons = new ArrayList<>(castStringList(option.get("fitReasons")));
+            fitReasons.add("高德/路线估算已有结果，本方案按最短真实候选降级保留，没有伪造成近场路线。");
+            option.put("fitReasons", fitReasons);
+            option.put("variantStrategy", String.valueOf(option.getOrDefault("variantStrategy", "")) + "+短驳降级");
+            options.add(option);
+        }
+        return options;
+    }
+
+    private List<Map<String, Object>> timeConflictFallbackOptions(List<TimeConflictFallbackCandidate> fallbacks,
+                                                                  int planCount, Map<String, Object> intent,
+                                                                  Map<String, Object> weather) {
+        List<Map<String, Object>> options = new ArrayList<>();
+        Set<String> signatures = new HashSet<>();
+        List<TimeConflictFallbackCandidate> sorted = fallbacks.stream()
+                .sorted(Comparator.comparingInt(TimeConflictFallbackCandidate::totalMinutes))
+                .toList();
+        for (TimeConflictFallbackCandidate fallback : sorted) {
+            if (options.size() >= planCount) {
+                break;
+            }
+            String signature = signature(fallback.stops());
+            if (!signatures.add(signature)) {
+                continue;
+            }
+            Map<String, Object> route = new LinkedHashMap<>(fallback.route());
+            route.put("timePolicy", "fallback_compress_stay_minutes");
+            route.put("transportSuggestion", "优先保留核心站点，压缩停留时间并用打车兜底收尾");
+            Map<String, Object> option = option(options.size() + 1, fallback.stops(), route,
+                    fallback.totalMinutes(), intent, weather);
+            applyGeneralVariant(option, options.size() + 1, intent);
+            option.put("constraintRecoveries", List.of(Map.of(
+                    "code", "TIME_CONFLICT",
+                    "status", "RECOVERED",
+                    "reason", "原始节奏会超过硬结束时间，已压缩停留并优先保留活动、餐饮和收尾点。",
+                    "fallbackTarget", "压缩停留时间/必要时短驳打车",
+                    "source", "mock"
+            )));
+            List<String> riskNotes = new ArrayList<>(castStringList(option.get("riskNotes")));
+            riskNotes.add("TIME_CONFLICT：本方案为硬结束时间压缩版，停留更短，确认前建议接受节奏较紧。");
+            option.put("riskNotes", riskNotes);
+            List<String> fitReasons = new ArrayList<>(castStringList(option.get("fitReasons")));
+            fitReasons.add("没有把可用地点误判为地点不足，而是按硬结束时间生成压缩恢复方案。");
+            option.put("fitReasons", fitReasons);
+            option.put("variantStrategy", String.valueOf(option.getOrDefault("variantStrategy", "")) + "+时间压缩");
+            options.add(option);
+        }
+        return options;
+    }
+
+    private Map<String, Object> functionalAcceptanceBlock(UUID planId, Map<String, Object> intent, String message) {
+        List<String> cities = citySignals(intent, message);
+        if (cities.size() < 2) {
+            return Map.of();
+        }
+        Map<String, Object> output = new LinkedHashMap<>();
+        output.put("provider", "local");
+        output.put("mode", "rule");
+        output.put("sourceUrl", "functional-acceptance-gate");
+        output.put("externalStatus", "CROSS_CITY");
+        output.put("cities", cities);
+        output.put("reason", "短时本地路线不能把多个城市硬串联成顺路行程。");
+        toolTraceService.trace(planId, "FunctionalAcceptanceGate", "CROSS_CITY", System.currentTimeMillis(),
+                Map.of("message", message == null ? "" : message), output);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        String cityText = String.join("、", cities);
+        result.put("options", List.of());
+        result.put("warnings", List.of(warning("跨城市行程不可行",
+                "这次请求同时包含 " + cityText + "，不符合本地短时顺路规划；建议先选择一个城市生成方案。")));
+        result.put("message", "这次行程包含跨城市硬约束，无法作为本地短时路线直接生成。");
+        result.put("blockedCode", "CROSS_CITY");
+        result.put("weather", Map.of());
+        result.put("generationMode", "functional_acceptance_gate");
+        return result;
+    }
+
+    private List<String> citySignals(Map<String, Object> intent, String message) {
+        List<String> cities = new ArrayList<>(castStringList(intent.get("citySignals")));
+        String value = message == null ? "" : message;
+        for (String city : List.of("北京", "上海", "天津", "重庆", "广州", "深圳", "杭州", "南京", "苏州", "成都",
+                "武汉", "西安", "长沙", "郑州", "青岛", "厦门", "大连", "沈阳", "哈尔滨")) {
+            if (containsCitySignal(value, city) && !cities.contains(city)) {
+                cities.add(city);
+            }
+        }
+        return cities.stream().distinct().limit(4).toList();
+    }
+
+    private boolean containsCitySignal(String message, String city) {
+        if (message == null || city == null || city.isBlank()) {
+            return false;
+        }
+        int index = message.indexOf(city);
+        while (index >= 0) {
+            int end = index + city.length();
+            String suffix = end < message.length()
+                    ? message.substring(end, Math.min(message.length(), end + 2))
+                    : "";
+            if (!startsWithAny(suffix, "东路", "西路", "南路", "北路", "路", "街", "大道", "地铁", "站")) {
+                return true;
+            }
+            index = message.indexOf(city, end);
+        }
+        return false;
+    }
+
+    private boolean startsWithAny(String value, String... prefixes) {
+        String text = value == null ? "" : value;
+        for (String prefix : prefixes) {
+            if (text.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void enrichFunctionalAcceptanceFields(Map<String, Object> option, Map<String, Object> intent) {
+        Map<String, Object> multiOrigin = castMap(intent.get("multiOrigin"));
+        Map<String, Object> locationTrust = castMap(intent.get("locationTrust"));
+        if (!multiOrigin.isEmpty()) {
+            option.put("multiOrigin", multiOrigin);
+        }
+        if (!locationTrust.isEmpty()) {
+            option.put("locationTrust", locationTrust);
+        }
+        List<String> highlights = new ArrayList<>(castStringList(option.get("routeHighlights")));
+        if (!multiOrigin.isEmpty()) {
+            prependUnique(highlights, String.valueOf(multiOrigin.getOrDefault("summary", "多起点汇合已纳入路线")));
+        }
+        if (!locationTrust.isEmpty()) {
+            prependUnique(highlights, "地图坐标可信度：" + locationTrust.getOrDefault("confidence", "")
+                    + "，" + locationTrust.getOrDefault("reason", ""));
+        }
+        if (!highlights.isEmpty()) {
+            option.put("routeHighlights", highlights);
+        }
+        List<String> fitReasons = new ArrayList<>(castStringList(option.get("fitReasons")));
+        if (!multiOrigin.isEmpty()) {
+            prependUnique(fitReasons, "已把多起点汇合纳入执行动作，确认后会先模拟接人再进入主行程。");
+        }
+        if (!locationTrust.isEmpty()) {
+            prependUnique(fitReasons, "坐标可信度已标注，地图点位需要以真实地图服务最终核验为准。");
+        }
+        if (!fitReasons.isEmpty()) {
+            option.put("fitReasons", fitReasons);
+        }
+    }
+
+    private void prependUnique(List<String> target, String value) {
+        if (value == null || value.isBlank() || target.contains(value)) {
+            return;
+        }
+        target.add(0, value);
+    }
+
+    private List<Poi> mergeExplicitPoiCandidates(Map<String, Object> intent, List<Poi> candidates) {
+        List<Poi> merged = new ArrayList<>(candidates == null ? List.of() : candidates);
+        List<Map<String, Object>> explicitPois = castList(intent.get("explicitPois"));
+        if (explicitPois.isEmpty()) {
+            return merged;
+        }
+        double[] base = explicitBasePoint(intent, merged);
+        int index = 0;
+        for (Map<String, Object> item : explicitPois) {
+            String name = String.valueOf(item.getOrDefault("name", "")).trim();
+            if (name.isBlank() || merged.stream().anyMatch(poi -> poi.getName().equals(name))) {
+                continue;
+            }
+            PoiType type = explicitPoiType(item);
+            Poi matched = bestExplicitMatch(name, type, merged);
+            if (matched != null) {
+                merged.add(renamePoi(matched, name, type));
+                continue;
+            }
+            if (!allowMockPoi) {
+                continue;
+            }
+            double lng = base == null ? 0.0 : base[0] + index * 0.004;
+            double lat = base == null ? 0.0 : base[1] + index * 0.003;
+            String address = base == null ? "用户指定地点，坐标待地图服务核验" : "用户指定地点，演示环境按当前锚点周边映射";
+            merged.add(new Poi(name, type, explicitSubtype(type), address,
+                    lng, lat, defaultExplicitDuration(type), defaultExplicitPrice(type), 4.6,
+                    false, type == PoiType.DINING && name.contains("清淡"), true, true,
+                    type != PoiType.DINING && name.contains("无票"), type == PoiType.DINING && name.contains("满"),
+                    "user-specified-mock", "explicit-" + index));
+            index++;
+        }
+        return merged;
+    }
+
+    private boolean hasCompleteExplicitPoiRoute(Map<String, Object> intent) {
+        List<Map<String, Object>> explicitPois = castList(intent.get("explicitPois"));
+        boolean hasActivity = explicitPois.stream().anyMatch(item -> explicitPoiType(item) != PoiType.DINING && explicitPoiType(item) != PoiType.EXTRA);
+        boolean hasDining = explicitPois.stream().anyMatch(item -> explicitPoiType(item) == PoiType.DINING);
+        boolean hasExtra = explicitPois.stream().anyMatch(item -> explicitPoiType(item) == PoiType.EXTRA);
+        return explicitPois.size() >= 3 && hasActivity && hasDining && hasExtra;
+    }
+
+    private List<Map<String, Object>> buildExplicitPoiOptions(UUID planId, Map<String, Object> intent,
+                                                              List<Poi> candidates, Map<String, Object> weather) {
+        List<Poi> explicitStops = explicitStops(intent, candidates);
+        if (explicitStops.size() < 3 || !hasRequiredPoiCoverage(explicitStops)) {
+            throw new PlanBlockedException(planId, "amap",
+                    "抱歉，未能核验你指定的全部地点，请检查 POI 名称或放宽为附近同类型地点。", 422);
+        }
+        List<Map<String, Object>> options = new ArrayList<>();
+        Poi origin = originPoi(intent);
+        for (int variant = 1; variant <= 3; variant++) {
+            List<Poi> stops = adjustExplicitDurations(explicitStops, variant);
+            List<Poi> routeStops = routeStops(origin, stops);
+            Map<String, Object> route = routeEstimateTool.route(planId, routeStops);
+            route.put("includesOrigin", origin != null);
+            route.put("transportStrategy", explicitTransportStrategy(variant));
+            route = normalizeExplicitRoute(route, routeStops, variant);
+            route = applyMultiOriginPickupBuffer(route, intent);
+            int totalMinutes = tools.totalMinutes(stops, ((Number) route.get("travelMinutes")).intValue());
+            boolean timeCompressed = false;
+            if (!fitsDuration(intent, totalMinutes)) {
+                tools.recovery(planId, "时间冲突", signature(stops), "压缩指定站点停留时间");
+                stops = fitExplicitDurationsToWindow(explicitStops, variant,
+                        ((Number) route.get("travelMinutes")).intValue(), durationMinutes(intent));
+                totalMinutes = tools.totalMinutes(stops, ((Number) route.get("travelMinutes")).intValue());
+                if (!fitsDuration(intent, totalMinutes)) {
+                    stops = forceFitExplicitDurations(stops, ((Number) route.get("travelMinutes")).intValue(),
+                            durationMinutes(intent));
+                    totalMinutes = tools.totalMinutes(stops, ((Number) route.get("travelMinutes")).intValue());
+                }
+                timeCompressed = true;
+            }
+            Map<String, Object> option = option(variant, stops, route, totalMinutes, intent, weather);
+            applyExplicitVariant(option, variant);
+            if (timeCompressed) {
+                option.put("constraintRecoveries", List.of(Map.of(
+                        "code", "TIME_CONFLICT",
+                        "status", "RECOVERED",
+                        "reason", "用户指定地点全部保留，已压缩停留时间并优先保障硬结束时间。",
+                        "fallbackTarget", "压缩停留时间/缩短咖啡停留/优先叫车收尾",
+                        "source", "mock"
+                )));
+            }
+            options.add(option);
+        }
+        return options;
+    }
+
+    private List<Poi> explicitStops(Map<String, Object> intent, List<Poi> candidates) {
+        List<Poi> stops = new ArrayList<>();
+        for (Map<String, Object> item : castList(intent.get("explicitPois"))) {
+            String name = String.valueOf(item.getOrDefault("name", "")).trim();
+            if (name.isBlank() || stops.stream().anyMatch(poi -> poi.getName().equals(name))) {
+                continue;
+            }
+            PoiType type = explicitPoiType(item);
+            candidates.stream()
+                    .filter(poi -> poi.getName().equals(name))
+                    .findFirst()
+                    .ifPresent(stops::add);
+        }
+        return stops;
+    }
+
+    private List<Poi> adjustExplicitDurations(List<Poi> stops, int variant) {
+        return stops.stream()
+                .map(poi -> poiWithDuration(poi, explicitDurationForVariant(poi.getType(), variant)))
+                .toList();
+    }
+
+    private List<Poi> fitExplicitDurationsToWindow(List<Poi> stops, int variant, int travelMinutes, int windowMinutes) {
+        if (windowMinutes <= 0 || stops.isEmpty()) {
+            return adjustExplicitDurations(stops, Math.max(variant, 3));
+        }
+        int available = Math.max(stops.size() * 12, windowMinutes - Math.max(0, travelMinutes));
+        List<Poi> compact = adjustExplicitDurations(stops, 3);
+        int compactStay = compact.stream().mapToInt(Poi::getDurationMinutes).sum();
+        if (compactStay <= available) {
+            return compact;
+        }
+        return compact.stream()
+                .map(poi -> {
+                    int minStay = poi.getType() == PoiType.DINING ? 25 : poi.getType() == PoiType.EXTRA ? 10 : 25;
+                    int adjusted = Math.max(minStay,
+                            (int) Math.floor(poi.getDurationMinutes() * (available / (double) compactStay)));
+                    return poiWithDuration(poi, adjusted);
+                })
+                .toList();
+    }
+
+    private List<Poi> forceFitExplicitDurations(List<Poi> stops, int travelMinutes, int windowMinutes) {
+        int available = windowMinutes - Math.max(0, travelMinutes);
+        if (available <= 0 || stops.isEmpty()) {
+            return stops;
+        }
+        int currentStay = stops.stream().mapToInt(Poi::getDurationMinutes).sum();
+        if (currentStay <= available) {
+            return stops;
+        }
+        double ratio = available / (double) currentStay;
+        return stops.stream()
+                .map(poi -> {
+                    int minStay = poi.getType() == PoiType.DINING ? 18 : poi.getType() == PoiType.EXTRA ? 8 : 18;
+                    int adjusted = Math.max(minStay, (int) Math.floor(poi.getDurationMinutes() * ratio));
+                    return poiWithDuration(poi, adjusted);
+                })
+                .toList();
+    }
+
+    private int explicitDurationForVariant(PoiType type, int variant) {
+        if (variant == 1) {
+            return type == PoiType.DINING ? 60 : type == PoiType.EXTRA ? 30 : 55;
+        }
+        if (variant == 2) {
+            return type == PoiType.DINING ? 55 : type == PoiType.EXTRA ? 25 : 50;
+        }
+        return type == PoiType.DINING ? 45 : type == PoiType.EXTRA ? 20 : 40;
+    }
+
+    private Map<String, Object> normalizeExplicitRoute(Map<String, Object> route, List<Poi> routeStops, int variant) {
+        Map<String, Object> normalized = new LinkedHashMap<>(route);
+        List<Integer> segmentMinutes = new ArrayList<>();
+        List<Double> segmentDistancesKm = new ArrayList<>();
+        List<Map<String, Object>> segments = new ArrayList<>();
+        List<String> routeModes = new ArrayList<>();
+        double distance = 0.0;
+        int travel = 0;
+        String mode = explicitRouteMode(variant);
+        for (int i = 1; i < routeStops.size(); i++) {
+            Poi from = routeStops.get(i - 1);
+            Poi to = routeStops.get(i);
+            double segmentKm = Math.max(0.2, distanceKm(from.getLat(), from.getLng(), to.getLat(), to.getLng()));
+            double roundedSegment = Math.round(segmentKm * 10.0) / 10.0;
+            int minutes = explicitSegmentMinutes(segmentKm, variant);
+            distance += segmentKm;
+            travel += minutes;
+            segmentMinutes.add(minutes);
+            segmentDistancesKm.add(roundedSegment);
+            routeModes.add(mode);
+            segments.add(Map.of(
+                    "from", from.getName(),
+                    "to", to.getName(),
+                    "durationMinutes", minutes,
+                    "distanceKm", roundedSegment,
+                    "routeMode", mode
+            ));
+        }
+        normalized.put("travelMinutes", travel);
+        normalized.put("distanceKm", Math.round(distance * 10.0) / 10.0);
+        normalized.put("segmentMinutes", segmentMinutes);
+        normalized.put("segmentDistancesKm", segmentDistancesKm);
+        normalized.put("segments", segments);
+        normalized.put("routeModes", routeModes);
+        normalized.put("source", String.valueOf(route.getOrDefault("source", "")) + "+explicit_strategy");
+        return normalized;
+    }
+
+    private Map<String, Object> applyMultiOriginPickupBuffer(Map<String, Object> route, Map<String, Object> intent) {
+        Map<String, Object> multiOrigin = castMap(intent.get("multiOrigin"));
+        if (multiOrigin.isEmpty()) {
+            return route;
+        }
+        int participants = castList(multiOrigin.get("participants")).size();
+        if (participants < 2) {
+            return route;
+        }
+        Map<String, Object> adjusted = new LinkedHashMap<>(route);
+        int pickupMinutes = Math.min(35, 10 + participants * 6);
+        int travelMinutes = intValue(adjusted.get("travelMinutes")) == null ? 0 : intValue(adjusted.get("travelMinutes"));
+        adjusted.put("travelMinutes", travelMinutes + pickupMinutes);
+        adjusted.put("multiOriginPickupMinutes", pickupMinutes);
+        adjusted.put("source", String.valueOf(route.getOrDefault("source", "")) + "+multi_origin_pickup");
+        return adjusted;
+    }
+
+    private int explicitSegmentMinutes(double distanceKm, int variant) {
+        double minutesPerKm = switch (variant) {
+            case 1 -> 12.0;
+            case 2 -> 7.5;
+            default -> 5.0;
+        };
+        int buffer = variant == 1 ? 2 : 1;
+        return Math.max(3, (int) Math.ceil(distanceKm * minutesPerKm) + buffer);
+    }
+
+    private String explicitRouteMode(int variant) {
+        return switch (variant) {
+            case 1 -> "walking";
+            case 2 -> "walking_ride_hailing";
+            default -> "ride_hailing";
+        };
+    }
+
+    private void applyExplicitVariant(Map<String, Object> option, int variant) {
+        Map<String, Object> route = castMap(option.get("route"));
+        String routeShape = routeShape(stopName(castList(option.get("timeline")), 0),
+                String.valueOf(option.getOrDefault("diningName", "")),
+                stopName(castList(option.get("timeline")), castList(option.get("timeline")).size() - 1));
+        if (variant == 1) {
+            option.put("name", "温柔步行遛弯版");
+            option.put("tag", "步行慢逛");
+            option.put("tagline", routeShape + "，全程步行为主，展览和咖啡都留缓冲，餐厅优先靠窗位。");
+            option.put("executionList", List.of("普通门票", "靠窗座位", "回家快车预约", "天气提醒"));
+            option.put("fitReasons", List.of("严格保留你指定的 POI，不替换餐厅和展馆。", "节奏最松，适合按 14:00-18:00 慢慢走完。", "预定细节：普通票、靠窗位、快车回家。"));
+            option.put("riskNotes", List.of("步行时间受天气影响，出发前建议看一眼降雨和风力。", "餐厅靠窗位为 Mock 预定偏好，真实情况以商家确认为准。"));
+        } else if (variant == 2) {
+            option.put("name", "轻松短驳舒适版");
+            option.put("tag", "短驳省力");
+            option.put("tagline", routeShape + "，近距离步行加一段短驳，餐厅靠里安静位，减少赶路压力。");
+            option.put("executionList", List.of("普通门票", "靠里安静座", "短驳打车", "提前取号"));
+            option.put("fitReasons", List.of("指定地点顺序不变，只把交通方式改成步行加短驳。", "吃饭前预留取号时间，避免到店等位太久。", "预定细节：靠里安静位、短驳车、提前取号提醒。"));
+            option.put("riskNotes", List.of("短驳路段高峰期可能慢 5-10 分钟。", "如果餐厅满员，执行中心会走同名/同区域替代处理。"));
+        } else {
+            option.put("name", "高效快享安心版");
+            option.put("tag", "高效快享");
+            option.put("tagline", routeShape + "，压缩停留并用快车收尾，门票走快速通道，适合 18:00 前稳妥到家。");
+            option.put("executionList", List.of("快速通道门票", "VIP/优先座", "回家快车", "排队提醒"));
+            option.put("fitReasons", List.of("保留大连世界博览广场、海味当家和咖啡点，不用换店凑方案。", "时间分配最紧凑，优先保证 18:00 前回家。", "预定细节：快速通道、VIP/优先座、快车回家。"));
+            option.put("riskNotes", List.of("节奏较紧，展览或用餐延时会压缩咖啡时间。", "快速通道和 VIP 座位为 Mock 演示能力，真实执行需商家接口确认。"));
+        }
+        route.put("transportStrategy", explicitTransportStrategy(variant));
+        option.put("route", route);
+        option.put("routeHighlights", List.of(routeShape, String.valueOf(route.get("transportStrategy")),
+                String.join("，", castStringList(option.get("executionList")))));
+        option.put("routeSummary", option.get("tagline"));
+    }
+
+    private void applyGeneralVariant(Map<String, Object> option, int rank, Map<String, Object> intent) {
+        if (hasCompleteExplicitPoiRoute(intent)) {
+            return;
+        }
+        List<Map<String, Object>> timeline = castList(option.get("timeline"));
+        if (timeline.isEmpty()) {
+            return;
+        }
+        Map<String, Object> route = castMap(option.get("route"));
+        String firstStop = stopName(timeline, 0);
+        String diningStop = String.valueOf(option.getOrDefault("diningName", ""));
+        String lastStop = String.valueOf(option.getOrDefault("lastStop", stopName(timeline, timeline.size() - 1)));
+        String routeShape = routeShape(firstStop, diningStop, lastStop);
+        List<String> highlights = new ArrayList<>(castStringList(option.get("routeHighlights")));
+        List<String> reasons = new ArrayList<>(castStringList(option.get("fitReasons")));
+        List<String> risks = new ArrayList<>(castStringList(option.get("riskNotes")));
+        String strategy;
+        String strategyText;
+        if (rank == 1) {
+            strategy = "relaxed";
+            strategyText = "轻松少折腾";
+            option.put("name", "轻松少走朋友局");
+            option.put("tag", "少折腾");
+            option.put("tagline", routeShape + "，优先选近场点位，吃饭前后都留缓冲，适合朋友慢慢碰头。");
+            option.put("executionList", List.of("普通入场/取号", "靠里安静座", "必要时短驳打车", "天气提醒"));
+            prependUnique(reasons, "策略差异：轻松版优先压低步行和换乘压力，餐厅座位偏安静好聊天。");
+            prependUnique(risks, "餐厅若临时满员，执行中心会优先找同区域同预算替代。");
+        } else if (rank == 2) {
+            strategy = "social";
+            strategyText = "热闹体验";
+            option.put("name", "热闹有趣小聚线");
+            option.put("tag", "朋友小聚");
+            option.put("tagline", routeShape + "，把更有社交感的活动放前面，吃饭承接聊天，收尾点适合继续坐一会儿。");
+            option.put("executionList", List.of("活动提前确认", "四人桌预留", "排队提醒", "聚会分享消息"));
+            prependUnique(reasons, "策略差异：热闹版优先朋友互动和活动记忆点，不靠改 POI 后缀凑方案。");
+            prependUnique(risks, "热闹型点位晚高峰可能排队，建议确认后提前取号。");
+        } else {
+            strategy = "efficient";
+            strategyText = "高效收口";
+            option.put("name", "高效顺路收口线");
+            option.put("tag", "高效顺路");
+            option.put("tagline", routeShape + "，路线更紧凑，必要时用短驳车收口，适合不想在路上消耗太多。");
+            option.put("executionList", List.of("快速入场确认", "优先座/四人桌", "短驳打车", "路线异常提醒"));
+            prependUnique(reasons, "策略差异：高效版优先路线闭环和晚间回程确定性，时间分配更紧凑。");
+            prependUnique(risks, "节奏更紧，活动或用餐延时会压缩最后一站。");
+        }
+        route.put("transportStrategy", strategyText);
+        option.put("route", route);
+        option.put("variantStrategy", strategy);
+        prependUnique(highlights, "方案策略：" + strategyText);
+        option.put("routeHighlights", highlights);
+        option.put("fitReasons", reasons);
+        option.put("riskNotes", risks);
+    }
+
+    private String explicitTransportStrategy(int variant) {
+        return switch (variant) {
+            case 1 -> "全程步行";
+            case 2 -> "步行 + 短驳打车";
+            default -> "高效快车收尾";
+        };
+    }
+
+    private Poi bestExplicitMatch(String name, PoiType type, List<Poi> candidates) {
+        String normalizedName = normalizePoiName(name);
+        return candidates.stream()
+                .filter(poi -> poi.getType() == type)
+                .filter(poi -> {
+                    String candidateName = normalizePoiName(poi.getName());
+                    return normalizedName.contains(candidateName) || candidateName.contains(normalizedName);
+                })
+                .findFirst()
+                .orElse(null);
+    }
+
+    private String normalizePoiName(String name) {
+        return name == null ? "" : name.replaceAll("[\\s()（）・·\\-]", "");
+    }
+
+    private Poi renamePoi(Poi original, String name, PoiType type) {
+        return new Poi(name, type, original.getSubtype(), original.getAddress(), original.getLng(), original.getLat(),
+                original.getDurationMinutes(), original.getAvgPrice(), original.getRating(), original.isKidFriendly(),
+                original.isLowCalorie(), original.isIndoor(), original.isSocial(), original.isTicketProblem(),
+                original.isSeatProblem(), original.getSourceProvider(), original.getSourcePoiId());
+    }
+
+    private PoiType explicitPoiType(Map<String, Object> item) {
+        String type = String.valueOf(item.getOrDefault("type", ""));
+        if ("dining".equals(type) || "餐饮".equals(type)) return PoiType.DINING;
+        if ("extra".equals(type) || "补充".equals(type)) return PoiType.EXTRA;
+        if ("culture".equals(type) || String.valueOf(item.getOrDefault("name", "")).contains("博览")) return PoiType.CULTURE;
+        return PoiType.ENTERTAINMENT;
+    }
+
+    private String explicitSubtype(PoiType type) {
+        return type == PoiType.DINING ? "用户指定餐厅" : type == PoiType.EXTRA ? "用户指定补充点" : "用户指定活动";
+    }
+
+    private int defaultExplicitDuration(PoiType type) {
+        return type == PoiType.DINING ? 65 : type == PoiType.EXTRA ? 30 : 60;
+    }
+
+    private int defaultExplicitPrice(PoiType type) {
+        return type == PoiType.DINING ? 120 : type == PoiType.EXTRA ? 35 : 60;
+    }
+
+    private double[] explicitBasePoint(Map<String, Object> intent, List<Poi> candidates) {
+        double[] anchor = anchor(intent);
+        if (anchor != null) {
+            return anchor;
+        }
+        if (candidates != null && !candidates.isEmpty()) {
+            return new double[] {candidates.get(0).getLng(), candidates.get(0).getLat()};
+        }
+        return null;
     }
 
     private boolean hasRequiredPoiCoverage(List<Poi> stops) {
@@ -725,6 +1443,13 @@ public class PlanningService {
         return 3;
     }
 
+    private int differentiatedPlanCount(int requestedPlanCount, Map<String, Object> intent) {
+        if (hasCompleteExplicitPoiRoute(intent)) {
+            return Math.min(requestedPlanCount, 3);
+        }
+        return Math.min(requestedPlanCount, 3);
+    }
+
     private int stopCount(Map<String, Object> intent) {
         Object requested = intent.get("requestedStopCount");
         if (requested instanceof Number number) {
@@ -818,7 +1543,7 @@ public class PlanningService {
     }
 
     private List<Poi> buildStops(List<Poi> activities, List<Poi> dining, List<Poi> extras, Poi activity,
-                                 Poi restaurant, int stopCount, int offset) {
+                                 Poi restaurant, Poi preferredExtra, int stopCount, int offset) {
         List<Poi> stops = new ArrayList<>();
         stops.add(activity);
         for (int i = 3; i < stopCount; i++) {
@@ -831,8 +1556,12 @@ public class PlanningService {
             }
         }
         stops.add(restaurant);
-        Poi extra = chooseExtra(extras, activity, offset);
-        if (stops.stream().noneMatch(poi -> poi.getName().equals(extra.getName()))) {
+        Poi extra = preferredExtra == null ? chooseExtra(extras, activity, offset) : preferredExtra;
+        if (extra.getName().equals(activity.getName())) {
+            extra = chooseExtra(extras, activity, offset);
+        }
+        String extraName = extra.getName();
+        if (stops.stream().noneMatch(poi -> poi.getName().equals(extraName))) {
             stops.add(extra);
         }
         return stops;
@@ -899,6 +1628,25 @@ public class PlanningService {
                 .toList();
     }
 
+    private List<Poi> forceFitStopDurations(List<Poi> stops, int travelMinutes, int windowMinutes) {
+        int available = windowMinutes - Math.max(0, travelMinutes);
+        if (available <= 0 || stops.isEmpty()) {
+            return stops;
+        }
+        int currentStopMinutes = stops.stream().mapToInt(Poi::getDurationMinutes).sum();
+        if (currentStopMinutes <= available) {
+            return stops;
+        }
+        double ratio = available / (double) currentStopMinutes;
+        return stops.stream()
+                .map(poi -> {
+                    int minimum = poi.getType() == PoiType.DINING ? 25 : poi.getType() == PoiType.EXTRA ? 10 : 25;
+                    int adjusted = Math.max(minimum, (int) Math.floor(poi.getDurationMinutes() * ratio));
+                    return poiWithDuration(poi, adjusted);
+                })
+                .toList();
+    }
+
     private Poi poiWithDuration(Poi original, int durationMinutes) {
         return new Poi(
                 original.getName(),
@@ -915,7 +1663,9 @@ public class PlanningService {
                 original.isIndoor(),
                 original.isSocial(),
                 original.isTicketProblem(),
-                original.isSeatProblem()
+                original.isSeatProblem(),
+                original.getSourceProvider(),
+                original.getSourcePoiId()
         );
     }
 
@@ -948,6 +1698,8 @@ public class PlanningService {
             timelineItem.put("lowCalorie", poi.isLowCalorie());
             timelineItem.put("lng", poi.getLng());
             timelineItem.put("lat", poi.getLat());
+            timelineItem.put("sourceProvider", poi.getSourceProvider());
+            timelineItem.put("sourcePoiId", poi.getSourcePoiId());
             timeline.add(timelineItem);
             // 累加当前站点停留时间 + 到下一站的交通时间
             currentTime = currentTime.plusMinutes(poi.getDurationMinutes());
@@ -956,8 +1708,7 @@ public class PlanningService {
                 currentTime = currentTime.plusMinutes(segmentMinutes.get(nextRouteSegmentIndex));
             }
         }
-        int groupTotal = groupTotal(intent);
-        int budget = stops.stream().mapToInt(Poi::getAvgPrice).sum() * groupTotal;
+        int budget = budgetEstimate(stops, intent);
         double distanceKm = ((Number) route.getOrDefault("distanceKm", 0)).doubleValue();
 
         // 归一化评分：三项各占 0-40/0-20/0-40，总分 0-100
@@ -983,6 +1734,10 @@ public class PlanningService {
         option.put("diningName", stops.stream().filter(poi -> poi.getType() == PoiType.DINING).findFirst().orElse(stops.get(1)).getName());
         option.put("lastStop", stops.get(stops.size() - 1).getName());
         return option;
+    }
+
+    private int budgetEstimate(List<Poi> stops, Map<String, Object> intent) {
+        return stops.stream().mapToInt(Poi::getAvgPrice).sum() * groupTotal(intent);
     }
 
     private void enrichCardContent(Map<String, Object> option, Map<String, Object> intent, int rank) {
@@ -1272,11 +2027,60 @@ public class PlanningService {
         return 2;
     }
 
+    private Integer budgetLimit(Map<String, Object> intent) {
+        Object value = castMap(intent.get("soft_preferences")).get("budgetAmount");
+        if (value instanceof Number number) {
+            return number.intValue();
+        }
+        String text = String.valueOf(value == null ? "" : value);
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("(\\d{2,5})").matcher(text);
+        return matcher.find() ? Integer.parseInt(matcher.group(1)) : null;
+    }
+
     private List<Map<String, Object>> weatherWarnings(Map<String, Object> weather) {
         if (weather == null || weather.isEmpty()) {
             return List.of(warning("天气暂不可用", "建议出发前自行确认天气变化。"));
         }
         return List.of(warning("天气建议", weatherSuggestion(weather)));
+    }
+
+    private void addPoiDetailWarnings(UUID planId, List<Map<String, Object>> options, List<Map<String, Object>> warnings) {
+        List<String> conflicts = new ArrayList<>();
+        int checked = 0;
+        int skipped = 0;
+        for (Map<String, Object> option : options.stream().limit(3).toList()) {
+            for (Map<String, Object> stop : castList(option.get("timeline"))) {
+                if (checked >= 9) {
+                    break;
+                }
+                String sourcePoiId = String.valueOf(stop.getOrDefault("sourcePoiId", ""));
+                if (sourcePoiId.isBlank() || "null".equals(sourcePoiId)) {
+                    skipped++;
+                    continue;
+                }
+                checked++;
+                Map<String, Object> detail = poiDetailTool.fetchDetail(planId, sourcePoiId,
+                        String.valueOf(stop.getOrDefault("name", "")));
+                LocalTime time = parseStopTime(stop.get("time"));
+                if (poiDetailTool.isClosedAt(detail, time)) {
+                    conflicts.add(String.valueOf(stop.getOrDefault("name", sourcePoiId)) + " 在 "
+                            + stop.getOrDefault("time", "") + " 可能未营业");
+                }
+            }
+        }
+        if (!conflicts.isEmpty()) {
+            warnings.add(warning("营业时间风险", String.join("；", conflicts)));
+        } else if (checked == 0 && skipped > 0) {
+            warnings.add(warning("营业状态待确认", "当前候选地点缺少可核验的高德 POI ID，出发前建议再次确认营业时间。"));
+        }
+    }
+
+    private LocalTime parseStopTime(Object value) {
+        try {
+            return LocalTime.parse(String.valueOf(value));
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private Map<String, Object> warning(String title, String message) {
@@ -1367,12 +2171,36 @@ public class PlanningService {
         };
     }
 
+    private double maxRouteDistanceKm(Map<String, Object> intent, CandidatePool candidatePool) {
+        double base = maxRouteDistanceKm(intent);
+        if (candidatePool == null || !candidatePool.expanded()) {
+            return base;
+        }
+        return Math.max(base, candidatePool.radiusKm() * 2.2);
+    }
+
+    private double fallbackRouteDistanceKm(Map<String, Object> intent, CandidatePool candidatePool, double strictLimitKm) {
+        if ("walking".equals(transportProfile(intent))) {
+            return strictLimitKm;
+        }
+        double radius = candidatePool == null || candidatePool.radiusKm() <= 0 ? POI_RADIUS_STEPS_KM.get(0) : candidatePool.radiusKm();
+        return Math.max(strictLimitKm * 1.35, radius * 1.15);
+    }
+
     private double directRoutePrefilterKm(Map<String, Object> intent) {
         return switch (transportProfile(intent)) {
             case "walking" -> WALKING_DIRECT_PREFILTER_KM;
             case "driving" -> DRIVING_DIRECT_PREFILTER_KM;
             default -> MIXED_DIRECT_PREFILTER_KM;
         };
+    }
+
+    private double directRoutePrefilterKm(Map<String, Object> intent, CandidatePool candidatePool) {
+        double base = directRoutePrefilterKm(intent);
+        if (candidatePool == null || !candidatePool.expanded()) {
+            return base;
+        }
+        return Math.max(base, candidatePool.radiusKm() * 2.0);
     }
 
     private String transportProfile(Map<String, Object> intent) {
@@ -1440,6 +2268,11 @@ public class PlanningService {
     }
 
     private record CandidatePool(List<Poi> pois, double radiusKm, boolean expanded) {}
+    private record StopCandidate(List<Poi> stops, String activityName, String diningName, String extraName, int budget) {}
+    private record RouteFallbackCandidate(List<Poi> stops, Map<String, Object> route, int totalMinutes,
+                                          StopCandidate candidate, double distanceKm, double strictLimitKm) {}
+    private record TimeConflictFallbackCandidate(List<Poi> stops, Map<String, Object> route, int totalMinutes,
+                                                 StopCandidate candidate) {}
 
     @SuppressWarnings("unchecked")
     private double[] anchor(Map<String, Object> intent) {
@@ -1528,6 +2361,10 @@ public class PlanningService {
     }
 
     private List<Map<String, Object>> executionSteps(Map<String, Object> execution) {
+        List<Map<String, Object>> structured = castList(execution.get("executionSteps"));
+        if (!structured.isEmpty()) {
+            return structured;
+        }
         List<Map<String, Object>> steps = new ArrayList<>();
         List<Map<String, Object>> orders = castList(execution.get("orders"));
         for (Map<String, Object> order : orders) {

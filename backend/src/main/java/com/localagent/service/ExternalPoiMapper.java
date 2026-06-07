@@ -12,6 +12,7 @@ final class ExternalPoiMapper {
     static Poi fromAmap(Map<?, ?> raw, PoiType requestedType) {
         String name = stringValue(raw.get("name"), "未命名地点");
         String address = stringValue(raw.get("address"), "");
+        String sourcePoiId = stringValue(raw.get("id"), "");
         String typeName = stringValue(raw.get("type"), requestedType.name().toLowerCase(Locale.ROOT));
         double[] location = parseLocation(stringValue(raw.get("location"), "0,0"));
         PoiType type = requestedType == PoiType.EXTRA ? PoiType.EXTRA : requestedType;
@@ -35,7 +36,9 @@ final class ExternalPoiMapper {
                 true,
                 social,
                 false,
-                false
+                false,
+                "amap",
+                sourcePoiId
         );
     }
 

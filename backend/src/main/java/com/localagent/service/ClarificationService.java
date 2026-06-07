@@ -71,6 +71,9 @@ public class ClarificationService {
         mergeStructuredPatch(merged, preferences, answers);
 
         merged.put("location", location);
+        if (location.get("locationTrust") instanceof Map<?, ?> trust) {
+            merged.put("locationTrust", trust);
+        }
         merged.put("group", group);
         merged.put("time_window", timeWindow);
         merged.put("soft_preferences", preferences);
@@ -233,8 +236,10 @@ public class ClarificationService {
     private void putLocation(Map<String, Object> location, String text) {
         if (text == null || text.isBlank()) return;
         double[] coordinates = parseCoordinates(text);
+        boolean fromConfiguredDefault = false;
         if (coordinates == null && isCurrentLocationText(text)) {
             coordinates = parseCoordinates(properties.getAmap().getDefaultOrigin());
+            fromConfiguredDefault = coordinates != null;
         }
         if (coordinates != null) {
             location.put("city", inferCity(text));
@@ -243,6 +248,11 @@ public class ClarificationService {
             location.put("lat", coordinates[1]);
             location.put("radius", "nearby");
             location.remove("needsConcreteAnchor");
+            if (fromConfiguredDefault) {
+                markConfiguredDefaultOrigin(location);
+            } else {
+                location.putIfAbsent("source", text.contains("当前位置") ? "user_coordinate" : "user_input");
+            }
             return;
         }
         if (!isConcreteLocation(text)) {
@@ -255,6 +265,11 @@ public class ClarificationService {
         location.put("city", inferCity(text));
         location.put("district", text);
         location.put("radius", "nearby");
+        location.put("locationTrust", Map.of(
+                "level", "city_landmark",
+                "confidence", 0.76,
+                "reason", "已识别城市和地标，坐标需由地图服务解析。"
+        ));
         location.remove("needsConcreteAnchor");
     }
 
@@ -268,6 +283,16 @@ public class ClarificationService {
         location.put("lat", coordinates[1]);
         location.put("radius", "nearby");
         location.remove("needsConcreteAnchor");
+        markConfiguredDefaultOrigin(location);
+    }
+
+    private void markConfiguredDefaultOrigin(Map<String, Object> location) {
+        location.put("source", "config_default_origin");
+        location.put("locationTrust", Map.of(
+                "level", "mock_or_config",
+                "confidence", 0.35,
+                "reason", "当前位置没有浏览器坐标，已使用本地配置的兜底坐标；出发前必须重新确认真实位置。"
+        ));
     }
 
     private void putTime(Map<String, Object> timeWindow, String text) {
@@ -545,7 +570,23 @@ public class ClarificationService {
     private Integer extractGroupTotal(String text) {
         if (isNoCompanionText(text) || containsAny(text, "我自己", "一个人", "1人", "单人", "独自", "自己")) return 1;
         if (containsAny(text, "情侣", "两人", "两个人", "2人", "夫妻")) return 2;
-        if (containsAny(text, "两个大人一个孩子", "一家三口", "三口", "两大一小")) return 3;
+        if (containsAny(text, "两个大人一个孩子", "一家三口", "三口", "两大一小", "2大1小")) return 3;
+        java.util.regex.Matcher compactFamily = java.util.regex.Pattern
+                .compile("(\\d+)\\s*(大|个大人)\\s*(\\d+)\\s*(小|个孩子|个小孩|个儿童)")
+                .matcher(text == null ? "" : text);
+        if (compactFamily.find()) {
+            return Integer.parseInt(compactFamily.group(1)) + Integer.parseInt(compactFamily.group(3));
+        }
+        java.util.regex.Matcher adultsChild = java.util.regex.Pattern
+                .compile("([一二两三四五六七八九十\\d]+)个?大人([一二两三四五六七八九十\\d]+)个?(\\d{1,2}\\s*岁)?(孩子|小孩|儿童)")
+                .matcher(text == null ? "" : text);
+        if (adultsChild.find()) {
+            return parseChineseNumber(adultsChild.group(1)) + parseChineseNumber(adultsChild.group(2));
+        }
+        java.util.regex.Matcher chinesePeople = java.util.regex.Pattern
+                .compile("([一二两三四五六七八九十])\\s*(个)?\\s*(人|朋友|同事|同学)")
+                .matcher(text == null ? "" : text);
+        if (chinesePeople.find()) return parseChineseNumber(chinesePeople.group(1));
         Integer number = extractNumber(text);
         return number == null || number > 50 ? null : number;
     }
@@ -565,8 +606,10 @@ public class ClarificationService {
 
     private boolean isLikelySolo(String text) {
         String value = string(text);
-        return containsAny(value, "我现在在", "只有我", "就我", "我自己", "一个人", "独自")
-                && !containsAny(value, "朋友", "爸妈", "父母", "孩子", "同事", "同学", "老婆", "老公", "对象");
+        boolean hasCompanionSignal = containsAny(value, "朋友", "好友", "爸妈", "父母", "爸爸", "妈妈", "孩子",
+                "小孩", "儿童", "同事", "同学", "老婆", "老公", "对象", "情侣", "夫妻", "家人", "带");
+        return containsAny(value, "只有我", "就我", "我自己", "一个人", "独自", "单人")
+                || (!hasCompanionSignal && containsAny(value, "我现在在", "我今天", "我想", "我想去", "我在", "我去"));
     }
 
     private Integer extractNumber(String text) {
@@ -677,6 +720,26 @@ public class ClarificationService {
             case "九" -> 9;
             case "十" -> 10;
             default -> Integer.parseInt(text);
+        };
+    }
+
+    private int parseChineseNumber(String text) {
+        String value = text == null ? "" : text.trim();
+        if (value.matches("\\d+")) {
+            return Integer.parseInt(value);
+        }
+        return switch (value) {
+            case "一" -> 1;
+            case "二", "两" -> 2;
+            case "三" -> 3;
+            case "四" -> 4;
+            case "五" -> 5;
+            case "六" -> 6;
+            case "七" -> 7;
+            case "八" -> 8;
+            case "九" -> 9;
+            case "十" -> 10;
+            default -> 0;
         };
     }
 

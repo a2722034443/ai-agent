@@ -34,6 +34,8 @@ public class ExternalClientProperties {
         private String city = "";
         private String defaultOrigin = "";
         private int timeoutMs = 3000;
+        private int detailTimeoutMs = 3000;
+        private boolean trafficEnabled = false;
 
         public boolean isEnabled() { return enabled; }
         public void setEnabled(boolean enabled) { this.enabled = enabled; }
@@ -51,6 +53,10 @@ public class ExternalClientProperties {
         public void setDefaultOrigin(String defaultOrigin) { this.defaultOrigin = defaultOrigin; }
         public int getTimeoutMs() { return timeoutMs; }
         public void setTimeoutMs(int timeoutMs) { this.timeoutMs = timeoutMs; }
+        public int getDetailTimeoutMs() { return detailTimeoutMs; }
+        public void setDetailTimeoutMs(int detailTimeoutMs) { this.detailTimeoutMs = detailTimeoutMs; }
+        public boolean isTrafficEnabled() { return trafficEnabled; }
+        public void setTrafficEnabled(boolean trafficEnabled) { this.trafficEnabled = trafficEnabled; }
     }
 
     public static class Search {
@@ -85,6 +91,7 @@ public class ExternalClientProperties {
         private double temperature = 0.1;
         private int timeoutMs = 3000;
         private String routerMode = "primary-fallback";
+        private String intentParserMode = "llm-fallback";
         private final Endpoint secondary = new Endpoint();
 
         public boolean isEnabled() { return enabled; }
@@ -105,6 +112,8 @@ public class ExternalClientProperties {
         public void setTimeoutMs(int timeoutMs) { this.timeoutMs = timeoutMs; }
         public String getRouterMode() { return routerMode; }
         public void setRouterMode(String routerMode) { this.routerMode = routerMode; }
+        public String getIntentParserMode() { return intentParserMode; }
+        public void setIntentParserMode(String intentParserMode) { this.intentParserMode = intentParserMode; }
         public Endpoint getSecondary() { return secondary; }
     }
 

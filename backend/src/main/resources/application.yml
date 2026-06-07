@@ -36,6 +36,8 @@ external:
     city: ${AMAP_CITY:}
     default-origin: ${AMAP_DEFAULT_ORIGIN:}
     timeout-ms: ${AMAP_TIMEOUT_MS:3000}
+    detail-timeout-ms: ${AMAP_DETAIL_TIMEOUT_MS:3000}
+    traffic-enabled: ${AMAP_TRAFFIC_ENABLED:false}
   search:
     enabled: ${SEARCH_ENABLED:true}
     provider: ${SEARCH_PROVIDER:tavily}
@@ -53,6 +55,7 @@ external:
     temperature: ${MIMO_TEMPERATURE:0.1}
     timeout-ms: ${MIMO_TIMEOUT_MS:4000}
     router-mode: ${MIMO_ROUTER_MODE:primary-fallback}
+    intent-parser-mode: ${MIMO_INTENT_PARSER_MODE:llm-fallback}
     secondary:
       enabled: ${MIMO_SECONDARY_ENABLED:true}
       api-key: ${MIMO_SECONDARY_API_KEY:}

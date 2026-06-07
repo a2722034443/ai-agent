@@ -97,6 +97,13 @@ public class PlanSession {
         this.updatedAt = Instant.now();
     }
 
+    public void markBlocked(String intentJson, String resultJson) {
+        this.intentJson = intentJson;
+        this.resultJson = resultJson;
+        this.status = PlanStatus.BLOCKED;
+        this.updatedAt = Instant.now();
+    }
+
     public void markExecuting() {
         this.status = PlanStatus.EXECUTING;
         this.updatedAt = Instant.now();
